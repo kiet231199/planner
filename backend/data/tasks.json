@@ -1,0 +1,16 @@
+{
+    "tasks": [
+        {
+            "name": "Task 1",
+            "description": null,
+            "url": null,
+            "assignee": "Alice",
+            "taskType": "Design",
+            "taskLevel": null,
+            "startDate": "2026-05-25",
+            "stopDate": "2026-06-05",
+            "progressPercent": 50,
+            "id": "38a705b4-f653-4483-af31-195604aed1a4"
+        }
+    ]
+}

@@ -18,18 +18,14 @@ cd ..
 python -m pip install -r backend\requirements.txt
 ```
 
-Run the backend API:
-
-```powershell
-python backend\run.py
-```
-
-Run the frontend in a second terminal:
+Run the frontend and backend together:
 
 ```powershell
 cd frontend
 npm run dev
 ```
+
+Press `Ctrl+C` in that terminal to stop both processes.
 
 Open `http://localhost:5173`.
 

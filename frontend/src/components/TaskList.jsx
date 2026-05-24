@@ -4,11 +4,11 @@ import { getDurationDays } from "../utils/chartScale";
 
 
 export default function TaskList(props) {
-    const { tasks, selectedTaskId, onSelectTask } = props;
+    const { tasks, selectedTaskId, headerHeight, onSelectTask } = props;
 
     return (
         <Box className="task-list-panel">
-            <Box className="task-list-header">
+            <Box className="task-list-header" sx={{ height: `${headerHeight}px` }}>
                 <Typography className="task-list-cell task-list-heading">
                     Task Name
                 </Typography>

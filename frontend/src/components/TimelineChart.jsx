@@ -1,6 +1,16 @@
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Box, Typography } from "@mui/material";
 
-import { formatDateLabel, getTimelineMetrics } from "../utils/chartScale";
+import {
+    getTimelineDateAtOffset,
+    getTimelineMetrics,
+    getTimelineOffsetForDate,
+} from "../utils/chartScale";
+
+
+const DRAG_MOUSE_BUTTON = 0;
+const ZOOM_IN_DIRECTION = 10;
+const ZOOM_OUT_DIRECTION = -10;
 
 
 export default function TimelineChart(props) {
@@ -9,14 +19,141 @@ export default function TimelineChart(props) {
         selectedTaskId,
         zoomIndex,
         onSelectTask,
-        onTimelineWheel,
+        onTimelineZoom,
     } = props;
+
+    const panelRef = useRef(null);
+    const dragStateRef = useRef(null);
+    const didSetInitialScrollRef = useRef(false);
+    const metricsRef = useRef(null);
+    const onTimelineZoomRef = useRef(onTimelineZoom);
+    const pendingZoomAnchorRef = useRef(null);
+    const [isDragging, setIsDragging] = useState(false);
 
     const metrics = getTimelineMetrics(tasks, zoomIndex);
     const chartHeight = metrics.headerHeight + Math.max(tasks.length, 1) * metrics.rowHeight;
+    metricsRef.current = metrics;
+
+    useEffect(function keepTimelineZoomHandlerCurrent() {
+        onTimelineZoomRef.current = onTimelineZoom;
+    }, [onTimelineZoom]);
+
+    useLayoutEffect(function alignScrollWithTimelineScale() {
+        const panel = panelRef.current;
+
+        if (!panel) {
+            return;
+        }
+
+        if (!didSetInitialScrollRef.current) {
+            panel.scrollLeft = metrics.todayScrollLeft;
+            didSetInitialScrollRef.current = true;
+            return;
+        }
+
+        if (pendingZoomAnchorRef.current) {
+            const anchor = pendingZoomAnchorRef.current;
+            const anchorOffset = getTimelineOffsetForDate(
+                anchor.date,
+                anchor.dayRatio,
+                metrics.gridCells,
+            );
+            panel.scrollLeft = anchorOffset - anchor.viewportOffset;
+            pendingZoomAnchorRef.current = null;
+            return;
+        }
+    }, [metrics]);
+
+    useEffect(function bindDragListeners() {
+        function handleMouseMove(event) {
+            if (!dragStateRef.current) {
+                return;
+            }
+
+            const panel = dragStateRef.current.panel;
+            const dragDistance = event.clientX - dragStateRef.current.startClientX;
+            panel.scrollLeft = dragStateRef.current.startScrollLeft - dragDistance;
+        }
+
+        function handleMouseUp() {
+            dragStateRef.current = null;
+            setIsDragging(false);
+        }
+
+        window.addEventListener("mousemove", handleMouseMove);
+        window.addEventListener("mouseup", handleMouseUp);
+
+        return function removeDragListeners() {
+            window.removeEventListener("mousemove", handleMouseMove);
+            window.removeEventListener("mouseup", handleMouseUp);
+        };
+    }, []);
+
+    useEffect(function bindWheelListener() {
+        const panel = panelRef.current;
+
+        if (!panel) {
+            return undefined;
+        }
+
+        function handleTimelineWheel(event) {
+            if (event.ctrlKey) {
+                event.preventDefault();
+                pendingZoomAnchorRef.current = getZoomAnchor(
+                    panel,
+                    event,
+                    metricsRef.current.gridCells,
+                );
+                onTimelineZoomRef.current(getWheelZoomDirection(event));
+                return;
+            }
+
+            if (event.shiftKey || event.deltaX !== 0) {
+                event.preventDefault();
+                scrollTimelineVertically(panel, event.deltaY);
+            }
+        }
+
+        panel.addEventListener("wheel", handleTimelineWheel, {
+            passive: false,
+        });
+
+        return function removeWheelListener() {
+            panel.removeEventListener("wheel", handleTimelineWheel);
+        };
+    }, []);
+
+    function handleTimelineMouseDown(event) {
+        if (event.button !== DRAG_MOUSE_BUTTON) {
+            return;
+        }
+
+        if (event.target instanceof Element && event.target.closest(".task-bar")) {
+            return;
+        }
+
+        const panel = panelRef.current;
+
+        if (!panel) {
+            return;
+        }
+
+        event.preventDefault();
+
+        dragStateRef.current = {
+            panel,
+            startClientX: event.clientX,
+            startScrollLeft: panel.scrollLeft,
+        };
+        setIsDragging(true);
+    }
 
     return (
-        <Box className="timeline-panel" onWheel={onTimelineWheel}>
+        <Box
+            ref={panelRef}
+            className={isDragging ? "timeline-panel timeline-panel-dragging" : "timeline-panel"}
+            onMouseDown={handleTimelineMouseDown}
+        >
             <Box
                 className="timeline-canvas"
                 sx={{
@@ -25,14 +162,20 @@ export default function TimelineChart(props) {
                 }}
             >
                 <Box className="timeline-header" sx={{ height: `${metrics.headerHeight}px` }}>
-                    {metrics.days.map(function renderDay(day) {
+                    {metrics.headerRows.map(function renderHeaderRow(headerRow, rowIndex) {
                         return (
-                            <Box
-                                key={day.toISOString()}
-                                className="timeline-day-cell"
-                                sx={{ width: `${metrics.dayWidth}px` }}
-                            >
-                                {formatDateLabel(day)}
+                            <Box key={rowIndex} className="timeline-header-row">
+                                {headerRow.map(function renderHeaderCell(segment) {
+                                    return (
+                                        <Box
+                                            key={segment.key}
+                                            className="timeline-header-cell"
+                                            sx={{ width: `${segment.width}px` }}
+                                        >
+                                            {segment.label}
+                                        </Box>
+                                    );
+                                })}
                             </Box>
                         );
                     })}
@@ -44,12 +187,12 @@ export default function TimelineChart(props) {
                         minHeight: `${Math.max(tasks.length, 1) * metrics.rowHeight}px`,
                     }}
                 >
-                    {metrics.days.map(function renderGridColumn(day) {
+                    {metrics.gridCells.map(function renderGridCell(cell) {
                         return (
                             <Box
-                                key={day.toISOString()}
+                                key={cell.key}
                                 className="timeline-grid-column"
-                                sx={{ width: `${metrics.dayWidth}px` }}
+                                sx={{ width: `${cell.width}px` }}
                             />
                         );
                     })}
@@ -62,13 +205,9 @@ export default function TimelineChart(props) {
                 >
                     {tasks.length === 0 ? (
                         <Box
-                            className="timeline-empty-row"
+                            className="timeline-row-line"
                             sx={{ height: `${metrics.rowHeight}px` }}
-                        >
-                            <Typography variant="body2">
-                                Timeline will appear here.
-                            </Typography>
-                        </Box>
+                        />
                     ) : (
                         tasks.map(function renderRow(task) {
                             return (
@@ -130,8 +269,39 @@ export default function TimelineChart(props) {
 }
 
 
+function getZoomAnchor(panel, event, gridCells) {
+    const panelRect = panel.getBoundingClientRect();
+    const viewportOffset = event.clientX - panelRect.left;
+    const timelineOffset = panel.scrollLeft + viewportOffset;
+    const timelineDate = getTimelineDateAtOffset(timelineOffset, gridCells);
+
+    return {
+        ...timelineDate,
+        viewportOffset,
+    };
+}
+
+
+function getWheelZoomDirection(event) {
+    if (event.deltaY > 0) {
+        return ZOOM_OUT_DIRECTION;
+    }
+
+    return ZOOM_IN_DIRECTION;
+}
+
+
 function getTaskColor(task) {
     return getColorFromTaskType(task.taskType);
+}
+
+
+function scrollTimelineVertically(panel, deltaY) {
+    if (deltaY === 0) {
+        return;
+    }
+
+    panel.scrollTop += deltaY;
 }
 
 

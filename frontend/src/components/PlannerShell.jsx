@@ -4,6 +4,7 @@ import TaskDrawer from "./TaskDrawer";
 import TaskList from "./TaskList";
 import TaskToolbar from "./TaskToolbar";
 import TimelineChart from "./TimelineChart";
+import { getTimelineHeaderHeight } from "../utils/chartScale";
 
 
 export default function PlannerShell(props) {
@@ -19,8 +20,10 @@ export default function PlannerShell(props) {
         onDeleteSelectedTask,
         onDrawerClose,
         onSelectTask,
-        onTimelineWheel,
+        onTimelineZoom,
     } = props;
+
+    const timelineHeaderHeight = getTimelineHeaderHeight(zoomIndex);
 
     return (
         <Box className="planner-shell">
@@ -35,6 +38,7 @@ export default function PlannerShell(props) {
                 <TaskList
                     tasks={tasks}
                     selectedTaskId={selectedTaskId}
+                    headerHeight={timelineHeaderHeight}
                     onSelectTask={onSelectTask}
                 />
                 <TimelineChart
@@ -42,7 +46,7 @@ export default function PlannerShell(props) {
                     selectedTaskId={selectedTaskId}
                     zoomIndex={zoomIndex}
                     onSelectTask={onSelectTask}
-                    onTimelineWheel={onTimelineWheel}
+                    onTimelineZoom={onTimelineZoom}
                 />
             </Box>
             <TaskDrawer

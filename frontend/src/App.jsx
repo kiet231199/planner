@@ -3,11 +3,8 @@ import { Alert, Box, CssBaseline, Snackbar, ThemeProvider, createTheme } from "@
 
 import { createTask, deleteTask, listTasks } from "./api/tasksClient";
 import PlannerShell from "./components/PlannerShell";
+import { DEFAULT_ZOOM_INDEX, MAX_ZOOM_INDEX, MIN_ZOOM_INDEX } from "./utils/chartScale";
 
-
-const DEFAULT_ZOOM_INDEX = 1;
-const MIN_ZOOM_INDEX = 0;
-const MAX_ZOOM_INDEX = 2;
 
 const theme = createTheme({
     palette: {
@@ -22,7 +19,6 @@ const theme = createTheme({
         borderRadius: 6,
     },
 });
-
 
 export default function App() {
     const [tasks, setTasks] = useState([]);
@@ -92,13 +88,9 @@ export default function App() {
         }
     }
 
-    function handleTimelineWheel(event) {
-        event.preventDefault();
-
+    function handleTimelineZoom(zoomDirection) {
         setZoomIndex(function updateZoom(currentZoomIndex) {
-            const nextZoomIndex = event.deltaY > 0
-                ? currentZoomIndex - 1
-                : currentZoomIndex + 1;
+            const nextZoomIndex = currentZoomIndex + zoomDirection;
 
             return Math.min(Math.max(nextZoomIndex, MIN_ZOOM_INDEX), MAX_ZOOM_INDEX);
         });
@@ -142,7 +134,7 @@ export default function App() {
                     onCreateTask={handleCreateTask}
                     onDeleteSelectedTask={handleDeleteSelectedTask}
                     onSelectTask={setSelectedTaskId}
-                    onTimelineWheel={handleTimelineWheel}
+                    onTimelineZoom={handleTimelineZoom}
                 />
                 <Snackbar
                     open={Boolean(errorMessage)}

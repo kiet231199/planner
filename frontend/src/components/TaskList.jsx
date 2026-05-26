@@ -4,10 +4,24 @@ import { getDurationDays } from "../utils/chartScale";
 
 
 export default function TaskList(props) {
-    const { tasks, selectedTaskId, headerHeight, onSelectTask } = props;
+    const {
+        tasks,
+        selectedTaskIds,
+        headerHeight,
+        onClearSelection,
+        onSelectTask,
+    } = props;
+
+    function handleTaskListMouseDown(event) {
+        if (event.target instanceof Element && event.target.closest(".task-list-row")) {
+            return;
+        }
+
+        onClearSelection();
+    }
 
     return (
-        <Box className="task-list-panel">
+        <Box className="task-list-panel" onMouseDown={handleTaskListMouseDown}>
             <Box className="task-list-header" sx={{ height: `${headerHeight}px` }}>
                 <Typography className="task-list-cell task-list-heading">
                     Task Name
@@ -31,7 +45,7 @@ export default function TaskList(props) {
             ) : (
                 <List disablePadding>
                     {tasks.map(function renderTask(task) {
-                        const isSelected = task.id === selectedTaskId;
+                        const isSelected = selectedTaskIds.includes(task.id);
                         const assigneeLabel = getAssigneeLabel(task);
 
                         return (
@@ -39,8 +53,8 @@ export default function TaskList(props) {
                                 key={task.id}
                                 selected={isSelected}
                                 className="task-list-row"
-                                onClick={function selectTask() {
-                                    onSelectTask(task.id);
+                                onClick={function selectTask(event) {
+                                    onSelectTask(task.id, event.ctrlKey || event.metaKey);
                                 }}
                             >
                                 <Box className="task-list-cell task-list-name-cell">

@@ -56,3 +56,7 @@ class TaskCreate(BaseModel):
 
 class Task(TaskCreate):
     id: str
+
+
+class TaskListUpdate(BaseModel):
+    tasks: list[Task]

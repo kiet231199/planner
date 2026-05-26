@@ -14,6 +14,56 @@ export async function createTask(task) {
 }
 
 
+export async function createTaskAfter(task, afterTaskId) {
+    const queryString = afterTaskId ? `?after_task_id=${encodeURIComponent(afterTaskId)}` : "";
+
+    return sendJsonRequest(`/api/tasks${queryString}`, {
+        method: "POST",
+        body: JSON.stringify(task),
+    });
+}
+
+
+export async function updateTask(taskId, task) {
+    return sendJsonRequest(`/api/tasks/${taskId}`, {
+        method: "PUT",
+        body: JSON.stringify(task),
+    });
+}
+
+
+export async function replaceTasks(tasks) {
+    return sendJsonRequest("/api/tasks/bulk", {
+        method: "PUT",
+        body: JSON.stringify({ tasks }),
+    });
+}
+
+
+export function replaceTasksBeforeUnload(tasks) {
+    const body = JSON.stringify({ tasks });
+    const beaconPayload = new Blob([body], {
+        type: "text/plain;charset=UTF-8",
+    });
+
+    if (
+        navigator.sendBeacon
+        && navigator.sendBeacon(`${API_BASE_URL}/api/tasks/bulk/sync`, beaconPayload)
+    ) {
+        return;
+    }
+
+    void fetch(`${API_BASE_URL}/api/tasks/bulk`, {
+        method: "PUT",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body,
+        keepalive: true,
+    }).catch(function ignoreUnloadSyncError() {});
+}
+
+
 export async function deleteTask(taskId) {
     await sendJsonRequest(`/api/tasks/${taskId}`, {
         method: "DELETE",

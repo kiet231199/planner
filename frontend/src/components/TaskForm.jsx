@@ -31,8 +31,10 @@ const DEFAULT_FORM_VALUES = {
 
 
 export default function TaskForm(props) {
-    const { isSaving, onCancel, onCreateTask } = props;
-    const [formValues, setFormValues] = useState(DEFAULT_FORM_VALUES);
+    const { initialTask, isSaving, onCancel, onSubmitTask } = props;
+    const [formValues, setFormValues] = useState(function getInitialState() {
+        return getInitialFormValues(initialTask);
+    });
     const [formErrors, setFormErrors] = useState({});
 
     function handleTextChange(event) {
@@ -65,9 +67,9 @@ export default function TaskForm(props) {
             return;
         }
 
-        const wasCreated = await onCreateTask(normalizeTaskDraft(formValues));
+        const wasSaved = await onSubmitTask(normalizeTaskDraft(formValues));
 
-        if (wasCreated) {
+        if (wasSaved) {
             resetForm();
         }
     }
@@ -78,7 +80,7 @@ export default function TaskForm(props) {
     }
 
     function resetForm() {
-        setFormValues(DEFAULT_FORM_VALUES);
+        setFormValues(getInitialFormValues(initialTask));
         setFormErrors({});
     }
 
@@ -256,6 +258,25 @@ function validateForm(formValues) {
     }
 
     return errors;
+}
+
+
+function getInitialFormValues(task) {
+    if (!task) {
+        return DEFAULT_FORM_VALUES;
+    }
+
+    return {
+        name: task.name || "",
+        description: task.description || "",
+        url: task.url || "",
+        assignee: task.assignee || "Unassigned",
+        taskType: task.taskType || "Planning",
+        taskLevel: task.taskLevel || "",
+        startDate: task.startDate || "",
+        stopDate: task.stopDate || "",
+        progressPercent: task.progressPercent || 0,
+    };
 }
 
 

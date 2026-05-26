@@ -1,10 +1,10 @@
 import os
 
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from models import Task, TaskCreate
-from storage import create_task, delete_task, list_tasks
+from models import Task, TaskCreate, TaskListUpdate
+from storage import create_task, delete_task, list_tasks, replace_tasks, update_task
 
 
 DEFAULT_CORS_ORIGINS = [
@@ -33,7 +33,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=get_cors_origins(),
     allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
 
@@ -49,8 +49,26 @@ def get_tasks() -> list[Task]:
 
 
 @app.post("/api/tasks", response_model=Task, status_code=status.HTTP_201_CREATED)
-def post_task(task_create: TaskCreate) -> Task:
-    return create_task(task_create)
+def post_task(task_create: TaskCreate, after_task_id: str | None = None) -> Task:
+    return create_task(task_create, after_task_id)
+
+
+@app.put("/api/tasks/bulk", response_model=list[Task])
+def put_tasks_bulk(task_list_update: TaskListUpdate) -> list[Task]:
+    return replace_tasks(task_list_update.tasks)
+
+
+@app.post("/api/tasks/bulk/sync", response_model=list[Task])
+async def post_tasks_bulk_sync(request: Request) -> list[Task]:
+    payload = await request.json()
+    task_list_update = TaskListUpdate.model_validate(payload)
+
+    return replace_tasks(task_list_update.tasks)
+
+
+@app.put("/api/tasks/{task_id}", response_model=Task)
+def put_task(task_id: str, task_update: TaskCreate) -> Task:
+    return update_task(task_id, task_update)
 
 
 @app.delete("/api/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)

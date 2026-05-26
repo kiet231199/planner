@@ -15,19 +15,47 @@ DATA_FILE_PATH = Path(os.environ.get("PROJECT_PLANNER_DATA_FILE", DEFAULT_DATA_F
 
 
 def list_tasks() -> list[Task]:
-    tasks = _read_tasks()
-
-    return sorted(tasks, key=_sort_task)
+    return _read_tasks()
 
 
-def create_task(task_create: TaskCreate) -> Task:
+def create_task(task_create: TaskCreate, after_task_id: str | None = None) -> Task:
     tasks = _read_tasks()
     task = Task(id=str(uuid4()), **task_create.model_dump())
 
-    tasks.append(task)
+    if after_task_id:
+        insertion_index = _get_task_index(tasks, after_task_id) + 1
+        tasks.insert(insertion_index, task)
+    else:
+        tasks.append(task)
+
     _write_tasks(tasks)
 
     return task
+
+
+def update_task(task_id: str, task_update: TaskCreate) -> Task:
+    tasks = _read_tasks()
+    task_index = _get_task_index(tasks, task_id)
+    updated_task = Task(id=task_id, **task_update.model_dump())
+
+    tasks[task_index] = updated_task
+    _write_tasks(tasks)
+
+    return updated_task
+
+
+def replace_tasks(updated_tasks: list[Task]) -> list[Task]:
+    updated_task_ids = [task.id for task in updated_tasks]
+
+    if len(set(updated_task_ids)) != len(updated_task_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Task list contains duplicate task IDs.",
+        )
+
+    _write_tasks(updated_tasks)
+
+    return updated_tasks
 
 
 def delete_task(task_id: str) -> None:
@@ -43,8 +71,15 @@ def delete_task(task_id: str) -> None:
     _write_tasks(remaining_tasks)
 
 
-def _sort_task(task: Task) -> tuple[str, str]:
-    return (task.startDate.isoformat(), task.name.lower())
+def _get_task_index(tasks: list[Task], task_id: str) -> int:
+    for index, task in enumerate(tasks):
+        if task.id == task_id:
+            return index
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Task not found.",
+    )
 
 
 def _read_tasks() -> list[Task]:

@@ -1,10 +1,17 @@
 const DAY_IN_MILLISECONDS = 24 * 60 * 60 * 1000;
 const GENERATED_PAST_DAYS = 365;
 const GENERATED_FUTURE_DAYS = 730;
+const GENERATED_YEAR_MODE_PAST_YEARS = 10;
+const GENERATED_YEAR_MODE_FUTURE_YEARS = 20;
+const YEAR_MODE_SCROLL_BUFFER_YEARS = 4;
 const TASK_RANGE_PADDING_DAYS = 30;
 const MIN_BAR_WIDTH_PIXELS = 28;
 const ROW_HEIGHT_PIXELS = 38;
 const TIMELINE_HEADER_ROW_HEIGHT_PIXELS = 38;
+const TIMELINE_HEADER_ROW_COUNT = 2;
+const TIMELINE_HEADER_HEIGHT_PIXELS = (
+    TIMELINE_HEADER_ROW_HEIGHT_PIXELS * TIMELINE_HEADER_ROW_COUNT
+);
 const DAY_MODE_MIN_WIDTH_PIXELS = 36;
 const DAY_MODE_MAX_WIDTH_PIXELS = 78;
 const DEFAULT_DAY_WIDTH_PIXELS = 56;
@@ -14,6 +21,12 @@ const YEAR_LABEL_MIN_WIDTH_PIXELS = 80;
 const DAYS_PER_WEEK = 7;
 const WEEKS_PER_MONTH_FOR_ZOOM = 4;
 const MONTHS_PER_YEAR = 12;
+const CURRENT_YEAR_COUNT = 1;
+const NO_MINIMUM_TIMELINE_WIDTH = 0;
+const FIRST_MONTH_INDEX = 0;
+const FIRST_DAY_OF_MONTH = 1;
+const LAST_MONTH_INDEX = 11;
+const LAST_DAY_OF_DECEMBER = 31;
 const WEEK_MODE_MAX_WIDTH_PIXELS = (DAY_MODE_MIN_WIDTH_PIXELS - 1) * DAYS_PER_WEEK;
 const MONTH_MODE_MAX_WIDTH_PIXELS = (
     WEEK_LABEL_MIN_WIDTH_PIXELS - 1
@@ -30,15 +43,19 @@ export const MAX_ZOOM_INDEX = ZOOM_LEVELS.length - 1;
 export const MIN_ZOOM_INDEX = 0;
 
 
-export function getTimelineMetrics(tasks, zoomIndex) {
-    const visibleRange = getGeneratedRange(tasks);
-    const totalDays = getInclusiveDayCount(visibleRange.startDate, visibleRange.stopDate);
+export function getTimelineMetrics(
+    tasks,
+    zoomIndex,
+    minimumTimelineWidth = NO_MINIMUM_TIMELINE_WIDTH,
+) {
     const zoomLevel = ZOOM_LEVELS[zoomIndex] || ZOOM_LEVELS[DEFAULT_ZOOM_INDEX];
+    const visibleRange = getGeneratedRange(tasks, zoomLevel, minimumTimelineWidth);
+    const totalDays = getInclusiveDayCount(visibleRange.startDate, visibleRange.stopDate);
     const days = buildDays(visibleRange.startDate, totalDays);
     const gridCells = buildGridCells(days, zoomLevel);
     const timelineWidth = getTimelineWidth(gridCells);
     const headerRows = buildHeaderRows(gridCells, zoomLevel);
-    const headerHeight = headerRows.length * TIMELINE_HEADER_ROW_HEIGHT_PIXELS;
+    const headerHeight = getTimelineHeaderHeight();
     const today = normalizeDate(new Date());
     const todayScrollLeft = getDateOffset(today, gridCells);
     const todayDayWidth = getPixelsPerDayAtDate(today, gridCells);
@@ -65,14 +82,8 @@ export function getDurationDays(task) {
 }
 
 
-export function getTimelineHeaderHeight(zoomIndex) {
-    const zoomLevel = ZOOM_LEVELS[zoomIndex] || ZOOM_LEVELS[DEFAULT_ZOOM_INDEX];
-
-    if (zoomLevel.headerMode === "year") {
-        return TIMELINE_HEADER_ROW_HEIGHT_PIXELS;
-    }
-
-    return TIMELINE_HEADER_ROW_HEIGHT_PIXELS * 2;
+export function getTimelineHeaderHeight() {
+    return TIMELINE_HEADER_HEIGHT_PIXELS;
 }
 
 
@@ -263,16 +274,12 @@ function createTaskBar(task, index, gridCells) {
 }
 
 
-function getGeneratedRange(tasks) {
+function getGeneratedRange(tasks, zoomLevel, minimumTimelineWidth) {
     const today = normalizeDate(new Date());
-    const defaultStartDate = addDays(today, -GENERATED_PAST_DAYS);
-    const defaultStopDate = addDays(today, GENERATED_FUTURE_DAYS);
+    const defaultRange = getDefaultGeneratedRange(today, zoomLevel, minimumTimelineWidth);
 
     if (tasks.length === 0) {
-        return {
-            startDate: defaultStartDate,
-            stopDate: defaultStopDate,
-        };
+        return defaultRange;
     }
 
     const taskStartDates = tasks.map(function mapStartDate(task) {
@@ -285,9 +292,55 @@ function getGeneratedRange(tasks) {
     const latestTaskStopDate = addDays(new Date(Math.max(...taskStopDates)), TASK_RANGE_PADDING_DAYS);
 
     return {
-        startDate: new Date(Math.min(defaultStartDate, earliestTaskStartDate)),
-        stopDate: new Date(Math.max(defaultStopDate, latestTaskStopDate)),
+        startDate: new Date(Math.min(defaultRange.startDate, earliestTaskStartDate)),
+        stopDate: new Date(Math.max(defaultRange.stopDate, latestTaskStopDate)),
     };
+}
+
+
+function getDefaultGeneratedRange(today, zoomLevel, minimumTimelineWidth) {
+    if (zoomLevel.headerMode === "year") {
+        return getYearModeGeneratedRange(today, zoomLevel, minimumTimelineWidth);
+    }
+
+    return {
+        startDate: addDays(today, -GENERATED_PAST_DAYS),
+        stopDate: addDays(today, GENERATED_FUTURE_DAYS),
+    };
+}
+
+
+function getYearModeGeneratedRange(today, zoomLevel, minimumTimelineWidth) {
+    const currentYear = today.getFullYear();
+    const futureYears = getYearModeFutureYears(zoomLevel, minimumTimelineWidth);
+
+    return {
+        startDate: new Date(
+            currentYear - GENERATED_YEAR_MODE_PAST_YEARS,
+            FIRST_MONTH_INDEX,
+            FIRST_DAY_OF_MONTH,
+        ),
+        stopDate: new Date(
+            currentYear + futureYears,
+            LAST_MONTH_INDEX,
+            LAST_DAY_OF_DECEMBER,
+        ),
+    };
+}
+
+
+function getYearModeFutureYears(zoomLevel, minimumTimelineWidth) {
+    const minimumYearCount = (
+        Math.ceil(minimumTimelineWidth / zoomLevel.unitWidth)
+        + YEAR_MODE_SCROLL_BUFFER_YEARS
+    );
+    const minimumFutureYears = (
+        minimumYearCount
+        - GENERATED_YEAR_MODE_PAST_YEARS
+        - CURRENT_YEAR_COUNT
+    );
+
+    return Math.max(GENERATED_YEAR_MODE_FUTURE_YEARS, minimumFutureYears);
 }
 
 

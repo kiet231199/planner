@@ -30,6 +30,7 @@ body {
 
 .planner-shell {
     --planner-task-text-size: 0.86rem;
+    --planner-task-row-height: 38px;
     --planner-timeline-header-row-height: 38px;
 
     display: flex;
@@ -76,7 +77,25 @@ body {
     min-width: 0;
     overflow: auto;
     border-right: 1px solid #d8dee9;
-    background: #ffffff;
+    background-color: #ffffff;
+    background-image:
+        linear-gradient(#d8dee9, #d8dee9),
+        linear-gradient(#d8dee9, #d8dee9),
+        linear-gradient(#d8dee9, #d8dee9),
+        repeating-linear-gradient(
+            to bottom,
+            transparent 0,
+            transparent calc(var(--planner-task-row-height) - 1px),
+            #edf0f5 calc(var(--planner-task-row-height) - 1px),
+            #edf0f5 var(--planner-task-row-height)
+        );
+    background-position:
+        calc(100% - 218px) 0,
+        calc(100% - 132px) 0,
+        calc(100% - 76px) 0,
+        0 0;
+    background-repeat: no-repeat, no-repeat, no-repeat, repeat;
+    background-size: 1px 100%, 1px 100%, 1px 100%, auto;
 }
 
 .task-list-header {
@@ -157,11 +176,6 @@ body {
     color: #172033;
 }
 
-.empty-task-list {
-    padding: 24px 16px;
-    color: #607083;
-}
-
 .timeline-panel {
     min-width: 0;
     overflow: auto;
@@ -177,6 +191,7 @@ body {
 .timeline-canvas {
     position: relative;
     min-width: 100%;
+    height: 100%;
 }
 
 .timeline-header {
@@ -233,10 +248,14 @@ body {
 .timeline-rows {
     right: 0;
     z-index: 2;
-}
-
-.timeline-row-line {
-    border-bottom: 1px solid #edf0f5;
+    bottom: 0;
+    background: repeating-linear-gradient(
+        to bottom,
+        transparent 0,
+        transparent calc(var(--planner-task-row-height) - 1px),
+        #edf0f5 calc(var(--planner-task-row-height) - 1px),
+        #edf0f5 var(--planner-task-row-height)
+    );
 }
 
 .timeline-bars {

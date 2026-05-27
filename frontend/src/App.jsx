@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Box, CssBaseline, Snackbar, ThemeProvider, createTheme } from "@mui/material";
 
 import { listTasks, replaceTasks, replaceTasksBeforeUnload } from "./api/tasksClient";
@@ -11,30 +11,70 @@ import {
 } from "./utils/chartScale";
 
 
-const theme = createTheme({
-    palette: {
-        primary: {
-            main: "#1565c0",
-        },
-        background: {
-            default: "#f6f8fb",
-        },
-    },
-    shape: {
-        borderRadius: 6,
-    },
-});
-
+const COLOR_MODE_STORAGE_KEY = "planner-color-mode";
 const HISTORY_LIMIT = 30;
 const SAVE_ACTION_THRESHOLD = 10;
 const SAVE_INTERVAL_MILLISECONDS = 60 * 1000;
 const CLIENT_TASK_ID_PREFIX = "task";
+const BUTTON_LABEL_LINE_HEIGHT = 1.2;
+const LIGHT_COLOR_MODE = "light";
+const DARK_COLOR_MODE = "dark";
+
+const CATPPUCCIN_LATTE = {
+    base: "#eff1f5",
+    mantle: "#e6e9ef",
+    crust: "#dce0e8",
+    surface0: "#ccd0da",
+    surface1: "#bcc0cc",
+    surface2: "#acb0be",
+    overlay0: "#9ca0b0",
+    overlay1: "#8c8fa1",
+    overlay2: "#7c7f93",
+    subtext0: "#6c6f85",
+    subtext1: "#5c5f77",
+    text: "#4c4f69",
+    blue: "#1e66f5",
+    lavender: "#7287fd",
+    mauve: "#8839ef",
+    red: "#d20f39",
+    peach: "#fe640b",
+    yellow: "#df8e1d",
+    green: "#40a02b",
+    teal: "#179299",
+    sky: "#04a5e5",
+};
+
+const CATPPUCCIN_MACCHIATO = {
+    base: "#24273a",
+    mantle: "#1e2030",
+    crust: "#181926",
+    surface0: "#363a4f",
+    surface1: "#494d64",
+    surface2: "#5b6078",
+    overlay0: "#6e738d",
+    overlay1: "#8087a2",
+    overlay2: "#939ab7",
+    subtext0: "#a5adcb",
+    subtext1: "#b8c0e0",
+    text: "#cad3f5",
+    blue: "#8aadf4",
+    lavender: "#b7bdf8",
+    mauve: "#c6a0f6",
+    red: "#ed8796",
+    peach: "#f5a97f",
+    yellow: "#eed49f",
+    green: "#a6da95",
+    teal: "#8bd5ca",
+    sky: "#91d7e3",
+};
 
 
 export default function App() {
+    const [colorMode, setColorMode] = useState(getInitialColorMode);
     const [tasks, setTasks] = useState([]);
     const [selectedTaskIds, setSelectedTaskIds] = useState([]);
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+    const [isSettingsDrawerOpen, setIsSettingsDrawerOpen] = useState(false);
     const [drawerMode, setDrawerMode] = useState("create");
     const [isLoading, setIsLoading] = useState(true);
     const isSaving = false;
@@ -51,6 +91,14 @@ export default function App() {
     const isDirtyRef = useRef(false);
     const pendingActionCountRef = useRef(0);
     const isSavingRef = useRef(false);
+
+    const theme = useMemo(function createThemeForColorMode() {
+        return createPlannerTheme(colorMode);
+    }, [colorMode]);
+
+    useEffect(function syncDocumentColorMode() {
+        document.documentElement.dataset.colorMode = colorMode;
+    }, [colorMode]);
 
     useEffect(function loadInitialTasks() {
         loadTasks();
@@ -429,6 +477,19 @@ export default function App() {
         });
     }
 
+    function handleColorModeToggle() {
+        setColorMode(function toggleColorMode(currentColorMode) {
+            const nextColorMode = getNextColorMode(currentColorMode);
+            saveColorMode(nextColorMode);
+
+            return nextColorMode;
+        });
+    }
+
+    function handleSettingsClick() {
+        setIsSettingsDrawerOpen(true);
+    }
+
     function clearMissingSelection(loadedTasks) {
         setSelectedTaskIds(function clearSelection(currentSelectedTaskIds) {
             const loadedTaskIds = new Set(loadedTasks.map(function mapTaskId(task) {
@@ -454,22 +515,27 @@ export default function App() {
     return (
         <ThemeProvider theme={theme}>
             <CssBaseline />
-            <Box className="app-root">
+            <Box className="app-root" data-color-mode={colorMode}>
                 <PlannerShell
                     tasks={tasks}
                     selectedTaskId={selectedTaskId}
                     selectedTaskIds={selectedTaskIds}
                     isDrawerOpen={isDrawerOpen}
+                    isSettingsDrawerOpen={isSettingsDrawerOpen}
                     isLoading={isLoading}
                     isSaving={isSaving}
                     canRedo={historyState.canRedo}
                     canUndo={historyState.canUndo}
                     drawerMode={drawerMode}
+                    colorMode={colorMode}
                     selectedTask={selectedTask}
                     zoomIndex={zoomIndex}
                     onAddTaskClick={handleAddTaskClick}
                     onDrawerClose={function closeDrawer() {
                         setIsDrawerOpen(false);
+                    }}
+                    onSettingsDrawerClose={function closeSettingsDrawer() {
+                        setIsSettingsDrawerOpen(false);
                     }}
                     onCreateTask={handleCreateTask}
                     onDeleteSelectedTask={handleDeleteSelectedTask}
@@ -486,6 +552,8 @@ export default function App() {
                     onUndoTaskChange={handleUndoTaskChange}
                     onUpdateTask={handleUpdateTask}
                     onTimelineZoom={handleTimelineZoom}
+                    onColorModeToggle={handleColorModeToggle}
+                    onSettingsClick={handleSettingsClick}
                 />
                 <Snackbar
                     open={Boolean(errorMessage)}
@@ -499,6 +567,126 @@ export default function App() {
             </Box>
         </ThemeProvider>
     );
+}
+
+
+function createPlannerTheme(colorMode) {
+    const palette = getCatppuccinPalette(colorMode);
+
+    return createTheme({
+        palette: {
+            mode: colorMode,
+            primary: {
+                main: palette.blue,
+            },
+            secondary: {
+                main: palette.mauve,
+            },
+            error: {
+                main: palette.red,
+            },
+            warning: {
+                main: palette.yellow,
+            },
+            info: {
+                main: palette.sky,
+            },
+            success: {
+                main: palette.green,
+            },
+            background: {
+                default: palette.base,
+                paper: palette.mantle,
+            },
+            text: {
+                primary: palette.text,
+                secondary: palette.subtext0,
+            },
+            divider: palette.surface0,
+        },
+        shape: {
+            borderRadius: 6,
+        },
+        components: {
+            MuiButton: {
+                styleOverrides: {
+                    root: {
+                        alignItems: "center",
+                        lineHeight: BUTTON_LABEL_LINE_HEIGHT,
+                    },
+                    startIcon: {
+                        alignItems: "center",
+                        display: "inline-flex",
+                    },
+                },
+            },
+            MuiDrawer: {
+                styleOverrides: {
+                    paper: {
+                        backgroundImage: "none",
+                    },
+                },
+            },
+        },
+    });
+}
+
+
+function getCatppuccinPalette(colorMode) {
+    if (colorMode === DARK_COLOR_MODE) {
+        return CATPPUCCIN_MACCHIATO;
+    }
+
+    return CATPPUCCIN_LATTE;
+}
+
+
+function getInitialColorMode() {
+    const storedColorMode = readStoredColorMode();
+
+    if (storedColorMode) {
+        return storedColorMode;
+    }
+
+    return LIGHT_COLOR_MODE;
+}
+
+
+function readStoredColorMode() {
+    try {
+        const storedColorMode = window.localStorage.getItem(COLOR_MODE_STORAGE_KEY);
+
+        if (isSupportedColorMode(storedColorMode)) {
+            return storedColorMode;
+        }
+    } catch {
+        return null;
+    }
+
+    return null;
+}
+
+
+function saveColorMode(colorMode) {
+    try {
+        window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, colorMode);
+    } catch {
+        return;
+    }
+}
+
+
+function isSupportedColorMode(colorMode) {
+    return colorMode === LIGHT_COLOR_MODE || colorMode === DARK_COLOR_MODE;
+}
+
+
+function getNextColorMode(colorMode) {
+    if (colorMode === DARK_COLOR_MODE) {
+        return LIGHT_COLOR_MODE;
+    }
+
+    return DARK_COLOR_MODE;
 }
 
 

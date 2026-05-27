@@ -3,6 +3,7 @@ import { Box, Typography } from "@mui/material";
 
 import {
     getDateDeltaDays,
+    getDurationDays,
     getTimelineDateAtOffset,
     getTimelineMetrics,
     getTimelineOffsetForDate,
@@ -17,6 +18,13 @@ const STOP_RESIZE_EDGE = "stop";
 const TASK_DRAG_THRESHOLD_PIXELS = 4;
 const TASK_DRAG_TYPE_MOVE = "task-move";
 const TASK_DRAG_TYPE_RESIZE = "task-resize";
+const TODAY_HIGHLIGHT_MODE_COLUMN = "column";
+const TODAY_HIGHLIGHT_MODE_LINE = "line";
+const TASK_HOVER_BUBBLE_OFFSET_Y_PIXELS = 14;
+const DAY_HEADER_MODE = "day";
+const WEEK_HEADER_MODE = "week";
+const SUNDAY_DAY_INDEX = 0;
+const SATURDAY_DAY_INDEX = 6;
 const ZOOM_IN_DIRECTION = 10;
 const ZOOM_OUT_DIRECTION = -10;
 
@@ -47,6 +55,7 @@ export default function TimelineChart(props) {
     const [isDragging, setIsDragging] = useState(false);
     const [panelWidth, setPanelWidth] = useState(0);
     const [taskDragPreview, setTaskDragPreview] = useState(null);
+    const [taskHoverBubble, setTaskHoverBubble] = useState(null);
 
     const metrics = getTimelineMetrics(tasks, zoomIndex, panelWidth);
     const chartHeight = metrics.headerHeight + Math.max(tasks.length, 1) * metrics.rowHeight;
@@ -231,6 +240,7 @@ export default function TimelineChart(props) {
 
         event.preventDefault();
         event.stopPropagation();
+        setTaskHoverBubble(null);
 
         if (event.ctrlKey || event.metaKey) {
             onSelectTask(task.id, true);
@@ -260,6 +270,18 @@ export default function TimelineChart(props) {
         };
     }
 
+    function handleTaskBarMouseMove(event, task) {
+        setTaskHoverBubble({
+            task,
+            x: event.clientX,
+            y: event.clientY + TASK_HOVER_BUBBLE_OFFSET_Y_PIXELS,
+        });
+    }
+
+    function handleTaskBarMouseLeave() {
+        setTaskHoverBubble(null);
+    }
+
     function handleTaskResizeMouseDown(event, task, resizeEdge) {
         if (event.button !== DRAG_MOUSE_BUTTON) {
             return;
@@ -273,6 +295,7 @@ export default function TimelineChart(props) {
 
         event.preventDefault();
         event.stopPropagation();
+        setTaskHoverBubble(null);
 
         if (selectedTaskIds.length > 1) {
             return;
@@ -306,6 +329,7 @@ export default function TimelineChart(props) {
         }
 
         dragState.hasMoved = true;
+        setTaskHoverBubble(null);
         dragState.dayDelta = getTaskDragDayDelta(dragState, event);
         dragState.pixelDelta = event.clientX - dragState.startClientX;
         dragState.pixelDeltaY = event.clientY - dragState.startClientY;
@@ -386,12 +410,36 @@ export default function TimelineChart(props) {
                     }}
                 >
                     {metrics.gridCells.map(function renderGridCell(cell) {
+                        const weekendShadowSegments = getWeekendShadowSegments(metrics, cell);
+                        const todayHighlight = getTodayHighlight(metrics, cell);
+
                         return (
                             <Box
                                 key={cell.key}
                                 className="timeline-grid-column"
                                 sx={{ width: `${cell.width}px` }}
-                            />
+                            >
+                                {weekendShadowSegments.map(function renderWeekendShadowSegment(
+                                    segment,
+                                ) {
+                                    return (
+                                        <Box
+                                            key={segment.key}
+                                            className="timeline-weekend-shadow-segment"
+                                            sx={{
+                                                left: `${segment.left}px`,
+                                                width: `${segment.width}px`,
+                                            }}
+                                        />
+                                    );
+                                })}
+                                {todayHighlight && (
+                                    <Box
+                                        className={getTodayHighlightClassName(todayHighlight)}
+                                        sx={getTodayHighlightStyle(todayHighlight)}
+                                    />
+                                )}
+                            </Box>
                         );
                     })}
                 </Box>
@@ -431,6 +479,13 @@ export default function TimelineChart(props) {
                                 onMouseDown={function startTaskDrag(event) {
                                     handleTaskBarMouseDown(event, bar.task);
                                 }}
+                                onMouseEnter={function showTaskHoverBubble(event) {
+                                    handleTaskBarMouseMove(event, bar.task);
+                                }}
+                                onMouseMove={function moveTaskHoverBubble(event) {
+                                    handleTaskBarMouseMove(event, bar.task);
+                                }}
+                                onMouseLeave={handleTaskBarMouseLeave}
                                 onKeyDown={function handleTaskBarKeyDown(event) {
                                     if (event.key === "Enter" || event.key === " ") {
                                         onSelectTask(bar.task.id, event.ctrlKey || event.metaKey);
@@ -473,10 +528,166 @@ export default function TimelineChart(props) {
                             </Box>
                         );
                     })}
+                    {taskHoverBubble && (
+                        <Box
+                            className="task-hover-bubble"
+                            sx={{
+                                left: `${taskHoverBubble.x}px`,
+                                top: `${taskHoverBubble.y}px`,
+                            }}
+                        >
+                            <Typography className="task-hover-bubble-title">
+                                {taskHoverBubble.task.name}
+                            </Typography>
+                            <Box className="task-hover-bubble-grid">
+                                <Typography className="task-hover-bubble-label">
+                                    Assignee
+                                </Typography>
+                                <Typography className="task-hover-bubble-value">
+                                    {getAssigneeLabel(taskHoverBubble.task)}
+                                </Typography>
+                                <Typography className="task-hover-bubble-label">
+                                    Progress
+                                </Typography>
+                                <Typography className="task-hover-bubble-value">
+                                    {getProgressLabel(taskHoverBubble.task)}
+                                </Typography>
+                                <Typography className="task-hover-bubble-label">
+                                    Duration
+                                </Typography>
+                                <Typography className="task-hover-bubble-value">
+                                    {getDurationLabel(taskHoverBubble.task)}
+                                </Typography>
+                            </Box>
+                        </Box>
+                    )}
                 </Box>
             </Box>
         </Box>
     );
+}
+
+
+function getAssigneeLabel(task) {
+    return task.assignee || "Unassigned";
+}
+
+
+function getProgressLabel(task) {
+    return `${task.progressPercent}%`;
+}
+
+
+function getDurationLabel(task) {
+    const durationDays = getDurationDays(task);
+
+    if (durationDays === 1) {
+        return "1 day";
+    }
+
+    return `${durationDays} days`;
+}
+
+
+function getTodayHighlight(metrics, cell) {
+    if (!isDateInCell(metrics.todayDate, cell)) {
+        return null;
+    }
+
+    const dayWidth = cell.width / cell.dayCount;
+    const dayOffset = getDateDeltaDays(cell.startDate, metrics.todayDate);
+    const dayLeft = dayOffset * dayWidth;
+
+    if (shouldShowTodayColumn(metrics)) {
+        return {
+            mode: TODAY_HIGHLIGHT_MODE_COLUMN,
+            left: dayLeft,
+            width: dayWidth,
+        };
+    }
+
+    return {
+        mode: TODAY_HIGHLIGHT_MODE_LINE,
+        left: dayLeft + dayWidth / 2,
+    };
+}
+
+
+function shouldShowTodayColumn(metrics) {
+    return metrics.headerMode === DAY_HEADER_MODE || metrics.headerMode === WEEK_HEADER_MODE;
+}
+
+
+function getTodayHighlightClassName(todayHighlight) {
+    if (todayHighlight.mode === TODAY_HIGHLIGHT_MODE_COLUMN) {
+        return "timeline-today-highlight-column";
+    }
+
+    return "timeline-today-highlight-line";
+}
+
+
+function getTodayHighlightStyle(todayHighlight) {
+    const todayHighlightStyle = {
+        left: `${todayHighlight.left}px`,
+    };
+
+    if (todayHighlight.width) {
+        todayHighlightStyle.width = `${todayHighlight.width}px`;
+    }
+
+    return todayHighlightStyle;
+}
+
+
+function isDateInCell(date, cell) {
+    return date >= cell.startDate && date <= cell.stopDate;
+}
+
+
+function getWeekendShadowSegments(metrics, cell) {
+    if (!shouldShowWeekendShadows(metrics)) {
+        return [];
+    }
+
+    const dayWidth = cell.width / cell.dayCount;
+    const weekendShadowSegments = [];
+
+    for (let dayOffset = 0; dayOffset < cell.dayCount; dayOffset += 1) {
+        const date = addDays(cell.startDate, dayOffset);
+
+        if (!isWeekendDate(date)) {
+            continue;
+        }
+
+        weekendShadowSegments.push({
+            key: `${cell.key}-${dayOffset}`,
+            left: dayOffset * dayWidth,
+            width: dayWidth,
+        });
+    }
+
+    return weekendShadowSegments;
+}
+
+
+function shouldShowWeekendShadows(metrics) {
+    return metrics.headerMode === DAY_HEADER_MODE || metrics.headerMode === WEEK_HEADER_MODE;
+}
+
+
+function isWeekendDate(date) {
+    const dayIndex = date.getDay();
+
+    return dayIndex === SUNDAY_DAY_INDEX || dayIndex === SATURDAY_DAY_INDEX;
+}
+
+
+function addDays(date, daysToAdd) {
+    const nextDate = new Date(date);
+    nextDate.setDate(nextDate.getDate() + daysToAdd);
+
+    return nextDate;
 }
 
 

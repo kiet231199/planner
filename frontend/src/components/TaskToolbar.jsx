@@ -2,6 +2,7 @@ import AddIcon from "@mui/icons-material/Add";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import RedoIcon from "@mui/icons-material/Redo";
+import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import UndoIcon from "@mui/icons-material/Undo";
 import { Box, Button, Typography } from "@mui/material";
 
@@ -17,6 +18,7 @@ export default function TaskToolbar(props) {
         onDeleteSelectedTask,
         onEditSelectedTask,
         onRedoTaskChange,
+        onSettingsClick,
         onUndoTaskChange,
     } = props;
 
@@ -29,7 +31,7 @@ export default function TaskToolbar(props) {
             </Box>
             <Box className="toolbar-actions">
                 <Button
-                    variant="contained"
+                    variant="outlined"
                     startIcon={<AddIcon />}
                     disabled={isSaving}
                     onClick={onAddTaskClick}
@@ -68,6 +70,13 @@ export default function TaskToolbar(props) {
                     onClick={onRedoTaskChange}
                 >
                     Redo
+                </Button>
+                <Button
+                    variant="outlined"
+                    startIcon={<SettingsOutlinedIcon />}
+                    onClick={onSettingsClick}
+                >
+                    Setting
                 </Button>
             </Box>
         </Box>

@@ -64,6 +64,8 @@ export function getTimelineMetrics(
         days,
         gridCells,
         headerRows,
+        headerMode: zoomLevel.headerMode,
+        todayDate: today,
         rowHeight: ROW_HEIGHT_PIXELS,
         headerHeight,
         timelineWidth,

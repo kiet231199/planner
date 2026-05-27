@@ -1,7 +1,5 @@
 import { Box, List, ListItemButton, Typography } from "@mui/material";
 
-import { getDurationDays } from "../utils/chartScale";
-
 
 export default function TaskList(props) {
     const {
@@ -9,6 +7,7 @@ export default function TaskList(props) {
         selectedTaskIds,
         headerHeight,
         onClearSelection,
+        onResizeStart,
         onSelectTask,
     } = props;
 
@@ -20,26 +19,21 @@ export default function TaskList(props) {
         onClearSelection();
     }
 
+    function handleResizeMouseDown(event) {
+        event.stopPropagation();
+        onResizeStart(event);
+    }
+
     return (
         <Box className="task-list-panel" onMouseDown={handleTaskListMouseDown}>
             <Box className="task-list-header" sx={{ height: `${headerHeight}px` }}>
                 <Typography className="task-list-cell task-list-heading">
                     Task Name
                 </Typography>
-                <Typography className="task-list-cell task-list-assignee">
-                    Assignee
-                </Typography>
-                <Typography className="task-list-cell task-list-duration">
-                    Days
-                </Typography>
-                <Typography className="task-list-cell task-list-progress">
-                    Progress
-                </Typography>
             </Box>
             <List disablePadding>
                 {tasks.map(function renderTask(task) {
                     const isSelected = selectedTaskIds.includes(task.id);
-                    const assigneeLabel = getAssigneeLabel(task);
 
                     return (
                         <ListItemButton
@@ -59,34 +53,19 @@ export default function TaskList(props) {
                                     {task.name}
                                 </Typography>
                             </Box>
-                            <Typography
-                                className="task-list-cell task-list-assignee"
-                                title={assigneeLabel}
-                            >
-                                {assigneeLabel}
-                            </Typography>
-                            <Typography className="task-list-cell task-list-duration">
-                                {getDurationDays(task)}
-                            </Typography>
-                            <Typography className="task-list-cell task-list-progress">
-                                {getProgressLabel(task)}
-                            </Typography>
                         </ListItemButton>
                     );
                 })}
             </List>
+            <Box
+                className="task-list-resize-handle"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize task list"
+                onMouseDown={handleResizeMouseDown}
+            />
         </Box>
     );
-}
-
-
-function getAssigneeLabel(task) {
-    return task.assignee || "Unassigned";
-}
-
-
-function getProgressLabel(task) {
-    return `${task.progressPercent}%`;
 }
 
 

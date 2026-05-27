@@ -11,6 +11,7 @@ import {
 
 const DRAG_MOUSE_BUTTON = 0;
 const MIN_RESIZE_PREVIEW_WIDTH_PIXELS = 28;
+const MIN_TIMELINE_HEADER_ROW_COUNT = 1;
 const START_RESIZE_EDGE = "start";
 const STOP_RESIZE_EDGE = "stop";
 const TASK_DRAG_THRESHOLD_PIXELS = 4;
@@ -23,6 +24,7 @@ const ZOOM_OUT_DIRECTION = -10;
 export default function TimelineChart(props) {
     const {
         tasks,
+        isLoading,
         selectedTaskIds,
         zoomIndex,
         onClearSelection,
@@ -43,10 +45,12 @@ export default function TimelineChart(props) {
     const onTimelineZoomRef = useRef(onTimelineZoom);
     const pendingZoomAnchorRef = useRef(null);
     const [isDragging, setIsDragging] = useState(false);
+    const [panelWidth, setPanelWidth] = useState(0);
     const [taskDragPreview, setTaskDragPreview] = useState(null);
 
-    const metrics = getTimelineMetrics(tasks, zoomIndex);
+    const metrics = getTimelineMetrics(tasks, zoomIndex, panelWidth);
     const chartHeight = metrics.headerHeight + Math.max(tasks.length, 1) * metrics.rowHeight;
+    const headerRowHeight = getTimelineHeaderRowHeight(metrics.headerHeight, metrics.headerRows);
     metricsRef.current = metrics;
 
     useEffect(function keepTimelineZoomHandlerCurrent() {
@@ -59,6 +63,35 @@ export default function TimelineChart(props) {
         onSelectTaskRef.current = onSelectTask;
     }, [onMoveTasks, onResizeTaskDates, onSelectTask]);
 
+    useLayoutEffect(function trackTimelinePanelWidth() {
+        const panel = panelRef.current;
+
+        if (!panel) {
+            return undefined;
+        }
+
+        function updatePanelWidth() {
+            setPanelWidth(panel.clientWidth);
+        }
+
+        updatePanelWidth();
+
+        if (typeof ResizeObserver === "undefined") {
+            window.addEventListener("resize", updatePanelWidth);
+
+            return function removeWindowResizeListener() {
+                window.removeEventListener("resize", updatePanelWidth);
+            };
+        }
+
+        const resizeObserver = new ResizeObserver(updatePanelWidth);
+        resizeObserver.observe(panel);
+
+        return function disconnectResizeObserver() {
+            resizeObserver.disconnect();
+        };
+    }, []);
+
     useLayoutEffect(function alignScrollWithTimelineScale() {
         const panel = panelRef.current;
 
@@ -66,8 +99,12 @@ export default function TimelineChart(props) {
             return;
         }
 
+        if (isLoading) {
+            return;
+        }
+
         if (!didSetInitialScrollRef.current) {
-            panel.scrollLeft = metrics.todayScrollLeft;
+            panel.scrollLeft = getCenteredTodayScrollLeft(panel, metrics);
             didSetInitialScrollRef.current = true;
             return;
         }
@@ -83,7 +120,7 @@ export default function TimelineChart(props) {
             pendingZoomAnchorRef.current = null;
             return;
         }
-    }, [metrics]);
+    }, [isLoading, metrics]);
 
     useEffect(function bindDragListeners() {
         function handleMouseMove(event) {
@@ -315,13 +352,17 @@ export default function TimelineChart(props) {
                 className="timeline-canvas"
                 sx={{
                     width: `${metrics.timelineWidth}px`,
-                    minHeight: `${chartHeight}px`,
+                    minHeight: `max(100%, ${chartHeight}px)`,
                 }}
             >
                 <Box className="timeline-header" sx={{ height: `${metrics.headerHeight}px` }}>
                     {metrics.headerRows.map(function renderHeaderRow(headerRow, rowIndex) {
                         return (
-                            <Box key={rowIndex} className="timeline-header-row">
+                            <Box
+                                key={rowIndex}
+                                className="timeline-header-row"
+                                sx={{ height: `${headerRowHeight}px` }}
+                            >
                                 {headerRow.map(function renderHeaderCell(segment) {
                                     return (
                                         <Box
@@ -341,7 +382,7 @@ export default function TimelineChart(props) {
                     className="timeline-grid"
                     sx={{
                         top: `${metrics.headerHeight}px`,
-                        minHeight: `${Math.max(tasks.length, 1) * metrics.rowHeight}px`,
+                        bottom: 0,
                     }}
                 >
                     {metrics.gridCells.map(function renderGridCell(cell) {
@@ -359,24 +400,7 @@ export default function TimelineChart(props) {
                     sx={{
                         top: `${metrics.headerHeight}px`,
                     }}
-                >
-                    {tasks.length === 0 ? (
-                        <Box
-                            className="timeline-row-line"
-                            sx={{ height: `${metrics.rowHeight}px` }}
-                        />
-                    ) : (
-                        tasks.map(function renderRow(task) {
-                            return (
-                                <Box
-                                    key={task.id}
-                                    className="timeline-row-line"
-                                    sx={{ height: `${metrics.rowHeight}px` }}
-                                />
-                            );
-                        })
-                    )}
-                </Box>
+                />
                 <Box
                     className="timeline-bars"
                     sx={{
@@ -453,6 +477,25 @@ export default function TimelineChart(props) {
             </Box>
         </Box>
     );
+}
+
+
+function getTimelineHeaderRowHeight(headerHeight, headerRows) {
+    const headerRowCount = Math.max(headerRows.length, MIN_TIMELINE_HEADER_ROW_COUNT);
+
+    return headerHeight / headerRowCount;
+}
+
+
+function getCenteredTodayScrollLeft(panel, metrics) {
+    const centeredScrollLeft = (
+        metrics.todayScrollLeft
+        + metrics.dayWidth / 2
+        - panel.clientWidth / 2
+    );
+    const maxScrollLeft = Math.max(0, panel.scrollWidth - panel.clientWidth);
+
+    return Math.min(Math.max(centeredScrollLeft, 0), maxScrollLeft);
 }
 
 

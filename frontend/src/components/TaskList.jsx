@@ -36,53 +36,45 @@ export default function TaskList(props) {
                     Progress
                 </Typography>
             </Box>
-            {tasks.length === 0 ? (
-                <Box className="empty-task-list">
-                    <Typography variant="body2">
-                        No tasks yet. Add one to start the plan.
-                    </Typography>
-                </Box>
-            ) : (
-                <List disablePadding>
-                    {tasks.map(function renderTask(task) {
-                        const isSelected = selectedTaskIds.includes(task.id);
-                        const assigneeLabel = getAssigneeLabel(task);
+            <List disablePadding>
+                {tasks.map(function renderTask(task) {
+                    const isSelected = selectedTaskIds.includes(task.id);
+                    const assigneeLabel = getAssigneeLabel(task);
 
-                        return (
-                            <ListItemButton
-                                key={task.id}
-                                selected={isSelected}
-                                className="task-list-row"
-                                onClick={function selectTask(event) {
-                                    onSelectTask(task.id, event.ctrlKey || event.metaKey);
-                                }}
+                    return (
+                        <ListItemButton
+                            key={task.id}
+                            selected={isSelected}
+                            className="task-list-row"
+                            onClick={function selectTask(event) {
+                                onSelectTask(task.id, event.ctrlKey || event.metaKey);
+                            }}
+                        >
+                            <Box className="task-list-cell task-list-name-cell">
+                                <Box
+                                    className="task-color-swatch"
+                                    sx={{ backgroundColor: getTaskColor(task) }}
+                                />
+                                <Typography className="task-list-name" title={task.name}>
+                                    {task.name}
+                                </Typography>
+                            </Box>
+                            <Typography
+                                className="task-list-cell task-list-assignee"
+                                title={assigneeLabel}
                             >
-                                <Box className="task-list-cell task-list-name-cell">
-                                    <Box
-                                        className="task-color-swatch"
-                                        sx={{ backgroundColor: getTaskColor(task) }}
-                                    />
-                                    <Typography className="task-list-name" title={task.name}>
-                                        {task.name}
-                                    </Typography>
-                                </Box>
-                                <Typography
-                                    className="task-list-cell task-list-assignee"
-                                    title={assigneeLabel}
-                                >
-                                    {assigneeLabel}
-                                </Typography>
-                                <Typography className="task-list-cell task-list-duration">
-                                    {getDurationDays(task)}
-                                </Typography>
-                                <Typography className="task-list-cell task-list-progress">
-                                    {getProgressLabel(task)}
-                                </Typography>
-                            </ListItemButton>
-                        );
-                    })}
-                </List>
-            )}
+                                {assigneeLabel}
+                            </Typography>
+                            <Typography className="task-list-cell task-list-duration">
+                                {getDurationDays(task)}
+                            </Typography>
+                            <Typography className="task-list-cell task-list-progress">
+                                {getProgressLabel(task)}
+                            </Typography>
+                        </ListItemButton>
+                    );
+                })}
+            </List>
         </Box>
     );
 }

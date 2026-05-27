@@ -64,6 +64,7 @@ export default function PlannerShell(props) {
                 />
                 <TimelineChart
                     tasks={tasks}
+                    isLoading={isLoading}
                     selectedTaskIds={selectedTaskIds}
                     zoomIndex={zoomIndex}
                     onClearSelection={onClearSelection}

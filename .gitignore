@@ -1,9 +1,11 @@
 node_modules/
 dist/
 __pycache__/
+backend/data/
 *.pyc
 .venv/
 .env
 .codex/
+.codegraph/
 AGENTS.md
 COMMENTS.md

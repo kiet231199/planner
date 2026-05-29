@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Box, CssBaseline, Snackbar, ThemeProvider, createTheme } from "@mui/material";
 
-import { listTasks, replaceTasks, replaceTasksBeforeUnload } from "./api/tasksClient";
+import {
+    createDayOffs,
+    deleteDayOffs,
+    listDayOffs,
+    listTasks,
+    replaceDayOffs,
+    replaceTasks,
+    replaceTasksBeforeUnload,
+} from "./api/tasksClient";
 import PlannerShell from "./components/PlannerShell";
 import {
     DEFAULT_ZOOM_INDEX,
@@ -72,12 +80,16 @@ const CATPPUCCIN_MACCHIATO = {
 export default function App() {
     const [colorMode, setColorMode] = useState(getInitialColorMode);
     const [tasks, setTasks] = useState([]);
+    const [dayOffs, setDayOffs] = useState([]);
     const [selectedTaskIds, setSelectedTaskIds] = useState([]);
+    const [selectedDayOffDates, setSelectedDayOffDates] = useState([]);
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+    const [isDayOffDrawerOpen, setIsDayOffDrawerOpen] = useState(false);
     const [isSettingsDrawerOpen, setIsSettingsDrawerOpen] = useState(false);
     const [drawerMode, setDrawerMode] = useState("create");
     const [isLoading, setIsLoading] = useState(true);
-    const isSaving = false;
+    const [isDayOffSaving, setIsDayOffSaving] = useState(false);
+    const isSaving = isDayOffSaving;
     const [errorMessage, setErrorMessage] = useState("");
     const [historyState, setHistoryState] = useState({
         canUndo: false,
@@ -85,7 +97,10 @@ export default function App() {
     });
     const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
     const tasksRef = useRef([]);
+    const dayOffsRef = useRef([]);
     const selectedTaskIdsRef = useRef([]);
+    const selectedDayOffDatesRef = useRef([]);
+    const lastSelectedDayOffDateRef = useRef(null);
     const undoStackRef = useRef([]);
     const redoStackRef = useRef([]);
     const isDirtyRef = useRef(false);
@@ -100,29 +115,37 @@ export default function App() {
         document.documentElement.dataset.colorMode = colorMode;
     }, [colorMode]);
 
-    useEffect(function loadInitialTasks() {
-        loadTasks();
+    useEffect(function loadInitialPlannerData() {
+        loadPlannerData();
     }, []);
 
     useEffect(function keepLatestTasksReference() {
         tasksRef.current = tasks;
     }, [tasks]);
 
+    useEffect(function keepLatestDayOffsReference() {
+        dayOffsRef.current = dayOffs;
+    }, [dayOffs]);
+
     useEffect(function keepLatestSelectionReference() {
         selectedTaskIdsRef.current = selectedTaskIds;
     }, [selectedTaskIds]);
+
+    useEffect(function keepLatestDayOffSelectionReference() {
+        selectedDayOffDatesRef.current = selectedDayOffDates;
+    }, [selectedDayOffDates]);
 
     useEffect(function bindTaskKeyboardShortcuts() {
         function handleGlobalKeyDown(event) {
             if (shouldUndoTasks(event, isDrawerOpen)) {
                 event.preventDefault();
-                handleUndoTaskChange();
+                void handleUndoTaskChange();
                 return;
             }
 
             if (shouldRedoTasks(event, isDrawerOpen)) {
                 event.preventDefault();
-                handleRedoTaskChange();
+                void handleRedoTaskChange();
                 return;
             }
 
@@ -171,13 +194,36 @@ export default function App() {
         };
     }, []);
 
-    async function loadTasks() {
+    async function loadPlannerData() {
         setIsLoading(true);
 
         try {
-            const loadedTasks = await listTasks();
+            const [tasksResult, dayOffsResult] = await Promise.allSettled([
+                listTasks(),
+                listDayOffs(),
+            ]);
+
+            if (tasksResult.status === "rejected") {
+                throw tasksResult.reason;
+            }
+
+            const loadedTasks = tasksResult.value;
+
+            tasksRef.current = loadedTasks;
             setTasks(loadedTasks);
             clearMissingSelection(loadedTasks);
+
+            if (dayOffsResult.status === "fulfilled") {
+                const loadedDayOffs = dayOffsResult.value;
+
+                dayOffsRef.current = loadedDayOffs;
+                setDayOffs(loadedDayOffs);
+                return;
+            }
+
+            dayOffsRef.current = [];
+            setDayOffs([]);
+            setErrorMessage(getDayOffLoadErrorMessage(dayOffsResult.reason));
         } catch (error) {
             setErrorMessage(error.message);
         } finally {
@@ -332,6 +378,97 @@ export default function App() {
         setIsDrawerOpen(true);
     }
 
+    function handleDayOffActionClick() {
+        if (selectedDayOffDates.length === 0) {
+            return;
+        }
+
+        if (hasDayOffForSelectedDates(dayOffs, selectedDayOffDates)) {
+            void handleRemoveSelectedDayOffs();
+            return;
+        }
+
+        setIsDayOffDrawerOpen(true);
+    }
+
+    async function handleCreateDayOffs(dayOffDraft) {
+        const beforeDayOffs = dayOffsRef.current;
+        const beforeSelectedDayOffDates = selectedDayOffDatesRef.current;
+
+        setIsDayOffSaving(true);
+
+        try {
+            const updatedDayOffs = await createDayOffs(dayOffDraft);
+
+            commitDayOffChange(
+                beforeDayOffs,
+                updatedDayOffs,
+                beforeSelectedDayOffDates,
+                beforeSelectedDayOffDates,
+                "Add day-off",
+            );
+            setIsDayOffDrawerOpen(false);
+
+            return true;
+        } catch (error) {
+            setErrorMessage(error.message);
+
+            return false;
+        } finally {
+            setIsDayOffSaving(false);
+        }
+    }
+
+    async function handleRemoveSelectedDayOffs() {
+        if (selectedDayOffDates.length === 0) {
+            return;
+        }
+
+        const beforeDayOffs = dayOffsRef.current;
+        const beforeSelectedDayOffDates = selectedDayOffDatesRef.current;
+
+        setIsDayOffSaving(true);
+
+        try {
+            const updatedDayOffs = await deleteDayOffs(selectedDayOffDates);
+
+            commitDayOffChange(
+                beforeDayOffs,
+                updatedDayOffs,
+                beforeSelectedDayOffDates,
+                beforeSelectedDayOffDates,
+                "Remove day-off",
+            );
+        } catch (error) {
+            setErrorMessage(error.message);
+        } finally {
+            setIsDayOffSaving(false);
+        }
+    }
+
+    function handleSelectDayOffDate(date, selectionMode) {
+        setSelectedDayOffDates(function updateSelectedDayOffDates(currentDates) {
+            const nextDates = getNextSelectedDayOffDates(
+                currentDates,
+                date,
+                selectionMode,
+                lastSelectedDayOffDateRef.current,
+            );
+
+            if (!selectionMode.isRangeSelect) {
+                lastSelectedDayOffDateRef.current = date;
+            }
+
+            selectedDayOffDatesRef.current = nextDates;
+
+            return nextDates;
+        });
+    }
+
+    function handleDayOffDrawerClose() {
+        setIsDayOffDrawerOpen(false);
+    }
+
     function handleEditSelectedTask() {
         if (selectedTaskIds.length !== 1) {
             return;
@@ -347,7 +484,7 @@ export default function App() {
         setIsDrawerOpen(true);
     }
 
-    function handleUndoTaskChange() {
+    async function handleUndoTaskChange() {
         const historyEntry = undoStackRef.current.pop();
 
         if (!historyEntry) {
@@ -356,12 +493,18 @@ export default function App() {
         }
 
         pushLimitedHistoryEntry(redoStackRef.current, historyEntry);
-        applyTaskSnapshot(historyEntry.beforeTasks, historyEntry.selectedTaskIdsBefore);
-        markTasksDirty();
+        applyPlannerSnapshot(
+            historyEntry.beforeTasks,
+            historyEntry.beforeDayOffs,
+            historyEntry.selectedTaskIdsBefore,
+            historyEntry.selectedDayOffDatesBefore,
+        );
+
+        await persistHistoryUndoRedoChange(historyEntry, "before");
         refreshHistoryState();
     }
 
-    function handleRedoTaskChange() {
+    async function handleRedoTaskChange() {
         const historyEntry = redoStackRef.current.pop();
 
         if (!historyEntry) {
@@ -370,8 +513,14 @@ export default function App() {
         }
 
         pushLimitedHistoryEntry(undoStackRef.current, historyEntry);
-        applyTaskSnapshot(historyEntry.afterTasks, historyEntry.selectedTaskIdsAfter);
-        markTasksDirty();
+        applyPlannerSnapshot(
+            historyEntry.afterTasks,
+            historyEntry.afterDayOffs,
+            historyEntry.selectedTaskIdsAfter,
+            historyEntry.selectedDayOffDatesAfter,
+        );
+
+        await persistHistoryUndoRedoChange(historyEntry, "after");
         refreshHistoryState();
     }
 
@@ -392,26 +541,83 @@ export default function App() {
         const historyEntry = {
             beforeTasks: cloneTasks(beforeTasks),
             afterTasks: cloneTasks(afterTasks),
+            beforeDayOffs: cloneDayOffs(dayOffsRef.current),
+            afterDayOffs: cloneDayOffs(dayOffsRef.current),
             selectedTaskIdsBefore: [...selectedTaskIdsBefore],
             selectedTaskIdsAfter: [...selectedTaskIdsAfter],
+            selectedDayOffDatesBefore: [...selectedDayOffDatesRef.current],
+            selectedDayOffDatesAfter: [...selectedDayOffDatesRef.current],
             label,
         };
 
         pushLimitedHistoryEntry(undoStackRef.current, historyEntry);
         redoStackRef.current = [];
-        applyTaskSnapshot(afterTasks, selectedTaskIdsAfter);
+        applyPlannerSnapshot(
+            afterTasks,
+            dayOffsRef.current,
+            selectedTaskIdsAfter,
+            selectedDayOffDatesRef.current,
+        );
         markTasksDirty();
         refreshHistoryState();
     }
 
-    function applyTaskSnapshot(nextTasks, nextSelectedTaskIds) {
+    function commitDayOffChange(
+        beforeDayOffs,
+        afterDayOffs,
+        selectedDayOffDatesBefore,
+        selectedDayOffDatesAfter,
+        label,
+    ) {
+        if (
+            hasSameDayOffList(beforeDayOffs, afterDayOffs)
+            && hasSameStringList(selectedDayOffDatesBefore, selectedDayOffDatesAfter)
+        ) {
+            return;
+        }
+
+        const historyEntry = {
+            beforeTasks: cloneTasks(tasksRef.current),
+            afterTasks: cloneTasks(tasksRef.current),
+            beforeDayOffs: cloneDayOffs(beforeDayOffs),
+            afterDayOffs: cloneDayOffs(afterDayOffs),
+            selectedTaskIdsBefore: [...selectedTaskIdsRef.current],
+            selectedTaskIdsAfter: [...selectedTaskIdsRef.current],
+            selectedDayOffDatesBefore: [...selectedDayOffDatesBefore],
+            selectedDayOffDatesAfter: [...selectedDayOffDatesAfter],
+            label,
+        };
+
+        pushLimitedHistoryEntry(undoStackRef.current, historyEntry);
+        redoStackRef.current = [];
+        applyPlannerSnapshot(
+            tasksRef.current,
+            afterDayOffs,
+            selectedTaskIdsRef.current,
+            selectedDayOffDatesAfter,
+        );
+        refreshHistoryState();
+    }
+
+    function applyPlannerSnapshot(
+        nextTasks,
+        nextDayOffs,
+        nextSelectedTaskIds,
+        nextSelectedDayOffDates,
+    ) {
         const clonedTasks = cloneTasks(nextTasks);
+        const clonedDayOffs = cloneDayOffs(nextDayOffs);
         const clonedSelectedTaskIds = [...nextSelectedTaskIds];
+        const clonedSelectedDayOffDates = [...nextSelectedDayOffDates];
 
         tasksRef.current = clonedTasks;
+        dayOffsRef.current = clonedDayOffs;
         selectedTaskIdsRef.current = clonedSelectedTaskIds;
+        selectedDayOffDatesRef.current = clonedSelectedDayOffDates;
         setTasks(clonedTasks);
+        setDayOffs(clonedDayOffs);
         setSelectedTaskIds(clonedSelectedTaskIds);
+        setSelectedDayOffDates(clonedSelectedDayOffDates);
     }
 
     function markTasksDirty() {
@@ -442,6 +648,39 @@ export default function App() {
             setErrorMessage(error.message);
         } finally {
             isSavingRef.current = false;
+        }
+    }
+
+    async function persistHistoryUndoRedoChange(historyEntry, snapshotKey) {
+        if (!hasSameTaskList(historyEntry.beforeTasks, historyEntry.afterTasks)) {
+            markTasksDirty();
+        }
+
+        if (hasSameDayOffList(historyEntry.beforeDayOffs, historyEntry.afterDayOffs)) {
+            return;
+        }
+
+        let dayOffsToSave = historyEntry.afterDayOffs;
+
+        if (snapshotKey === "before") {
+            dayOffsToSave = historyEntry.beforeDayOffs;
+        }
+
+        await persistDayOffsToBackend(dayOffsToSave);
+    }
+
+    async function persistDayOffsToBackend(dayOffsToSave) {
+        setIsDayOffSaving(true);
+
+        try {
+            const updatedDayOffs = await replaceDayOffs(cloneDayOffs(dayOffsToSave));
+
+            dayOffsRef.current = cloneDayOffs(updatedDayOffs);
+            setDayOffs(updatedDayOffs);
+        } catch (error) {
+            setErrorMessage(error.message);
+        } finally {
+            setIsDayOffSaving(false);
         }
     }
 
@@ -511,6 +750,7 @@ export default function App() {
         return task.id === selectedTaskId;
     }) || null;
     const canEditSelectedTask = selectedTaskIds.length === 1;
+    const selectedDatesHaveDayOff = hasDayOffForSelectedDates(dayOffs, selectedDayOffDates);
 
     return (
         <ThemeProvider theme={theme}>
@@ -518,9 +758,12 @@ export default function App() {
             <Box className="app-root" data-color-mode={colorMode}>
                 <PlannerShell
                     tasks={tasks}
+                    dayOffs={dayOffs}
                     selectedTaskId={selectedTaskId}
                     selectedTaskIds={selectedTaskIds}
+                    selectedDayOffDates={selectedDayOffDates}
                     isDrawerOpen={isDrawerOpen}
+                    isDayOffDrawerOpen={isDayOffDrawerOpen}
                     isSettingsDrawerOpen={isSettingsDrawerOpen}
                     isLoading={isLoading}
                     isSaving={isSaving}
@@ -531,6 +774,9 @@ export default function App() {
                     selectedTask={selectedTask}
                     zoomIndex={zoomIndex}
                     onAddTaskClick={handleAddTaskClick}
+                    onCreateDayOffs={handleCreateDayOffs}
+                    onDayOffActionClick={handleDayOffActionClick}
+                    onDayOffDrawerClose={handleDayOffDrawerClose}
                     onDrawerClose={function closeDrawer() {
                         setIsDrawerOpen(false);
                     }}
@@ -546,14 +792,20 @@ export default function App() {
                     onRedoTaskChange={handleRedoTaskChange}
                     onResizeTaskDates={handleResizeTaskDates}
                     onClearSelection={function clearSelection() {
+                        lastSelectedDayOffDateRef.current = null;
+                        selectedTaskIdsRef.current = [];
+                        selectedDayOffDatesRef.current = [];
                         setSelectedTaskIds([]);
+                        setSelectedDayOffDates([]);
                     }}
                     onSelectTask={handleSelectTask}
+                    onSelectDayOffDate={handleSelectDayOffDate}
                     onUndoTaskChange={handleUndoTaskChange}
                     onUpdateTask={handleUpdateTask}
                     onTimelineZoom={handleTimelineZoom}
                     onColorModeToggle={handleColorModeToggle}
                     onSettingsClick={handleSettingsClick}
+                    selectedDatesHaveDayOff={selectedDatesHaveDayOff}
                 />
                 <Snackbar
                     open={Boolean(errorMessage)}
@@ -772,6 +1024,16 @@ function cloneTasks(tasks) {
 }
 
 
+function cloneDayOffs(dayOffs) {
+    return dayOffs.map(function cloneDayOff(dayOff) {
+        return {
+            ...dayOff,
+            assignees: [...dayOff.assignees],
+        };
+    });
+}
+
+
 function hasSameTaskSelection(firstSelectedTaskIds, secondSelectedTaskIds) {
     if (firstSelectedTaskIds.length !== secondSelectedTaskIds.length) {
         return false;
@@ -779,6 +1041,17 @@ function hasSameTaskSelection(firstSelectedTaskIds, secondSelectedTaskIds) {
 
     return firstSelectedTaskIds.every(function matchTaskId(taskId, index) {
         return taskId === secondSelectedTaskIds[index];
+    });
+}
+
+
+function hasSameStringList(firstValues, secondValues) {
+    if (firstValues.length !== secondValues.length) {
+        return false;
+    }
+
+    return firstValues.every(function matchValue(value, index) {
+        return value === secondValues[index];
     });
 }
 
@@ -1002,4 +1275,100 @@ function hasSameTaskValues(task, expectedTask) {
         && task.stopDate === expectedTask.stopDate
         && task.progressPercent === expectedTask.progressPercent
     );
+}
+
+
+function hasSameDayOffList(firstDayOffs, secondDayOffs) {
+    if (firstDayOffs.length !== secondDayOffs.length) {
+        return false;
+    }
+
+    return firstDayOffs.every(function matchDayOff(firstDayOff, index) {
+        const secondDayOff = secondDayOffs[index];
+
+        return firstDayOff.id === secondDayOff.id
+            && hasSameDayOffValues(firstDayOff, secondDayOff);
+    });
+}
+
+
+function hasSameDayOffValues(dayOff, expectedDayOff) {
+    return (
+        dayOff.date === expectedDayOff.date
+        && dayOff.name === expectedDayOff.name
+        && (dayOff.description || "") === (expectedDayOff.description || "")
+        && hasSameStringList(dayOff.assignees, expectedDayOff.assignees)
+    );
+}
+
+
+function hasDayOffForSelectedDates(dayOffs, selectedDates) {
+    if (selectedDates.length === 0) {
+        return false;
+    }
+
+    const selectedDateSet = new Set(selectedDates);
+
+    return dayOffs.some(function matchSelectedDate(dayOff) {
+        return selectedDateSet.has(dayOff.date);
+    });
+}
+
+
+function getNextSelectedDayOffDates(currentDates, date, selectionMode, anchorDate) {
+    if (selectionMode.isRangeSelect) {
+        const rangeDates = getDateRangeStrings(anchorDate || date, date);
+
+        if (selectionMode.isMultiSelect) {
+            return sortDateStrings([...new Set([...currentDates, ...rangeDates])]);
+        }
+
+        return rangeDates;
+    }
+
+    if (selectionMode.isMultiSelect) {
+        return toggleSelectedDayOffDate(currentDates, date);
+    }
+
+    return [date];
+}
+
+
+function toggleSelectedDayOffDate(selectedDates, date) {
+    if (selectedDates.includes(date)) {
+        return selectedDates.filter(function keepDate(selectedDate) {
+            return selectedDate !== date;
+        });
+    }
+
+    return sortDateStrings([...selectedDates, date]);
+}
+
+
+function getDateRangeStrings(firstDate, secondDate) {
+    const startDate = firstDate <= secondDate ? firstDate : secondDate;
+    const stopDate = firstDate <= secondDate ? secondDate : firstDate;
+    const dates = [];
+    let currentDate = startDate;
+
+    while (currentDate <= stopDate) {
+        dates.push(currentDate);
+        currentDate = addDaysToDateString(currentDate, 1);
+    }
+
+    return dates;
+}
+
+
+function sortDateStrings(dates) {
+    return [...dates].sort();
+}
+
+
+function getDayOffLoadErrorMessage(error) {
+    if (error && error.message) {
+        return `Day-offs could not be loaded. ${error.message}`;
+    }
+
+    return "Day-offs could not be loaded.";
 }

@@ -231,6 +231,9 @@ function buildTimelineCellHeaderSegments(gridCells, formatLabel) {
         return {
             key: cell.key,
             label: formatLabel(cell.startDate),
+            startDate: cell.startDate,
+            stopDate: cell.stopDate,
+            dayCount: cell.dayCount,
             width: cell.width,
         };
     });

@@ -3,14 +3,33 @@ import os
 from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from models import Task, TaskCreate, TaskListUpdate
-from storage import create_task, delete_task, list_tasks, replace_tasks, update_task
+from models import (
+    DayOff,
+    DayOffBulkCreate,
+    DayOffDateList,
+    DayOffListUpdate,
+    Task,
+    TaskCreate,
+    TaskListUpdate,
+)
+from storage import (
+    create_day_offs,
+    create_task,
+    delete_day_offs,
+    delete_task,
+    list_day_offs,
+    list_tasks,
+    replace_day_offs,
+    replace_tasks,
+    update_task,
+)
 
 
 DEFAULT_CORS_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
+DEFAULT_CORS_ORIGIN_REGEX = r"^http://(localhost|127\.0\.0\.1):\d+$"
 
 
 def get_cors_origins() -> list[str]:
@@ -26,12 +45,17 @@ def get_cors_origins() -> list[str]:
     ]
 
 
+def get_cors_origin_regex() -> str:
+    return os.environ.get("PROJECT_PLANNER_CORS_ORIGIN_REGEX", DEFAULT_CORS_ORIGIN_REGEX)
+
+
 app = FastAPI(title="Project Planner API")
 
 # CORSMiddleware lets the local Vite frontend call the FastAPI backend in dev.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_cors_origins(),
+    allow_origin_regex=get_cors_origin_regex(),
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
@@ -48,14 +72,29 @@ def get_tasks() -> list[Task]:
     return list_tasks()
 
 
+@app.get("/api/day-offs", response_model=list[DayOff])
+def get_day_offs() -> list[DayOff]:
+    return list_day_offs()
+
+
 @app.post("/api/tasks", response_model=Task, status_code=status.HTTP_201_CREATED)
 def post_task(task_create: TaskCreate, after_task_id: str | None = None) -> Task:
     return create_task(task_create, after_task_id)
 
 
+@app.post("/api/day-offs/bulk", response_model=list[DayOff], status_code=status.HTTP_201_CREATED)
+def post_day_offs_bulk(day_off_create: DayOffBulkCreate) -> list[DayOff]:
+    return create_day_offs(day_off_create)
+
+
 @app.put("/api/tasks/bulk", response_model=list[Task])
 def put_tasks_bulk(task_list_update: TaskListUpdate) -> list[Task]:
     return replace_tasks(task_list_update.tasks)
+
+
+@app.put("/api/day-offs/bulk", response_model=list[DayOff])
+def put_day_offs_bulk(day_off_list_update: DayOffListUpdate) -> list[DayOff]:
+    return replace_day_offs(day_off_list_update.dayOffs)
 
 
 @app.post("/api/tasks/bulk/sync", response_model=list[Task])
@@ -76,3 +115,8 @@ def remove_task(task_id: str) -> Response:
     delete_task(task_id)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.delete("/api/day-offs", response_model=list[DayOff])
+def remove_day_offs(day_off_dates: DayOffDateList) -> list[DayOff]:
+    return delete_day_offs(day_off_dates.dates)

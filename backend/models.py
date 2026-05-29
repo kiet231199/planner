@@ -60,3 +60,97 @@ class Task(TaskCreate):
 
 class TaskListUpdate(BaseModel):
     tasks: list[Task]
+
+
+class DayOffCreate(BaseModel):
+    date: date
+    name: str = Field(min_length=1)
+    description: Optional[str] = None
+    assignees: list[str] = Field(min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        trimmed_value = value.strip()
+
+        if not trimmed_value:
+            raise ValueError("Field must not be empty.")
+
+        return trimmed_value
+
+    @field_validator("description")
+    @classmethod
+    def normalize_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+
+        trimmed_value = value.strip()
+
+        if not trimmed_value:
+            return None
+
+        return trimmed_value
+
+    @field_validator("assignees")
+    @classmethod
+    def normalize_assignees(cls, value: list[str]) -> list[str]:
+        normalized_assignees = []
+
+        for assignee in value:
+            trimmed_assignee = assignee.strip()
+
+            if trimmed_assignee:
+                normalized_assignees.append(trimmed_assignee)
+
+        unique_assignees = list(dict.fromkeys(normalized_assignees))
+
+        if not unique_assignees:
+            raise ValueError("At least one assignee is required.")
+
+        if "All" in unique_assignees:
+            return ["All"]
+
+        return unique_assignees
+
+
+class DayOff(DayOffCreate):
+    id: str
+
+
+class DayOffListUpdate(BaseModel):
+    dayOffs: list[DayOff]
+
+
+class DayOffBulkCreate(BaseModel):
+    dates: list[date] = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: Optional[str] = None
+    assignees: list[str] = Field(min_length=1)
+
+    @field_validator("dates")
+    @classmethod
+    def normalize_dates(cls, value: list[date]) -> list[date]:
+        return list(dict.fromkeys(value))
+
+    @model_validator(mode="after")
+    def validate_day_off_draft(self) -> "DayOffBulkCreate":
+        day_off_create = DayOffCreate(
+            date=self.dates[0],
+            name=self.name,
+            description=self.description,
+            assignees=self.assignees,
+        )
+        self.name = day_off_create.name
+        self.description = day_off_create.description
+        self.assignees = day_off_create.assignees
+
+        return self
+
+
+class DayOffDateList(BaseModel):
+    dates: list[date] = Field(min_length=1)
+
+    @field_validator("dates")
+    @classmethod
+    def normalize_dates(cls, value: list[date]) -> list[date]:
+        return list(dict.fromkeys(value))

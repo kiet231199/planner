@@ -3,10 +3,17 @@ import { Box, List, ListItemButton, Typography } from "@mui/material";
 
 export default function TaskList(props) {
     const {
+        panelRef,
         tasks,
+        highlightedTaskId,
         selectedTaskIds,
         headerHeight,
+        onClearHighlight,
         onClearSelection,
+        onHighlightTask,
+        onHoverTask,
+        onHoverTaskEnd,
+        onPanelScroll,
         onResizeStart,
         onSelectTask,
     } = props;
@@ -16,6 +23,7 @@ export default function TaskList(props) {
             return;
         }
 
+        onClearHighlight();
         onClearSelection();
     }
 
@@ -24,8 +32,30 @@ export default function TaskList(props) {
         onResizeStart(event);
     }
 
+    function handleTaskListMouseMove(event) {
+        if (!(event.target instanceof Element)) {
+            return;
+        }
+
+        const taskRow = event.target.closest(".task-list-row");
+
+        if (!taskRow) {
+            onHoverTaskEnd();
+            return;
+        }
+
+        onHoverTask(taskRow.dataset.taskId);
+    }
+
     return (
-        <Box className="task-list-panel" onMouseDown={handleTaskListMouseDown}>
+        <Box
+            ref={panelRef}
+            className="task-list-panel"
+            onMouseDown={handleTaskListMouseDown}
+            onMouseLeave={onHoverTaskEnd}
+            onMouseMove={handleTaskListMouseMove}
+            onScroll={onPanelScroll}
+        >
             <Box className="task-list-header" sx={{ height: `${headerHeight}px` }}>
                 <Typography className="task-list-cell task-list-heading">
                     Task Name
@@ -34,13 +64,18 @@ export default function TaskList(props) {
             <List disablePadding>
                 {tasks.map(function renderTask(task) {
                     const isSelected = selectedTaskIds.includes(task.id);
+                    const isHovered = highlightedTaskId === task.id;
+                    const rowClassName = getTaskListRowClassName(isHovered);
 
                     return (
                         <ListItemButton
                             key={task.id}
+                            data-task-id={task.id}
+                            disableRipple
                             selected={isSelected}
-                            className="task-list-row"
+                            className={rowClassName}
                             onClick={function selectTask(event) {
+                                onHighlightTask(task.id);
                                 onSelectTask(task.id, event.ctrlKey || event.metaKey);
                             }}
                         >
@@ -66,6 +101,15 @@ export default function TaskList(props) {
             />
         </Box>
     );
+}
+
+
+function getTaskListRowClassName(isHovered) {
+    if (isHovered) {
+        return "task-list-row task-list-row-hovered";
+    }
+
+    return "task-list-row";
 }
 
 

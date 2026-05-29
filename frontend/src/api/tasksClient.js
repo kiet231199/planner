@@ -6,10 +6,23 @@ export async function listTasks() {
 }
 
 
+export async function listDayOffs() {
+    return sendJsonRequest("/api/day-offs");
+}
+
+
 export async function createTask(task) {
     return sendJsonRequest("/api/tasks", {
         method: "POST",
         body: JSON.stringify(task),
+    });
+}
+
+
+export async function createDayOffs(dayOffDraft) {
+    return sendJsonRequest("/api/day-offs/bulk", {
+        method: "POST",
+        body: JSON.stringify(dayOffDraft),
     });
 }
 
@@ -36,6 +49,14 @@ export async function replaceTasks(tasks) {
     return sendJsonRequest("/api/tasks/bulk", {
         method: "PUT",
         body: JSON.stringify({ tasks }),
+    });
+}
+
+
+export async function replaceDayOffs(dayOffs) {
+    return sendJsonRequest("/api/day-offs/bulk", {
+        method: "PUT",
+        body: JSON.stringify({ dayOffs }),
     });
 }
 
@@ -71,12 +92,17 @@ export async function deleteTask(taskId) {
 }
 
 
+export async function deleteDayOffs(dates) {
+    return sendJsonRequest("/api/day-offs", {
+        method: "DELETE",
+        body: JSON.stringify({ dates }),
+    });
+}
+
+
 async function sendJsonRequest(path, options = {}) {
     const response = await fetch(`${API_BASE_URL}${path}`, {
-        headers: {
-            "Content-Type": "application/json",
-            ...options.headers,
-        },
+        headers: getRequestHeaders(options),
         ...options,
     });
 
@@ -89,6 +115,18 @@ async function sendJsonRequest(path, options = {}) {
     }
 
     return response.json();
+}
+
+
+function getRequestHeaders(options) {
+    if (!options.body) {
+        return options.headers;
+    }
+
+    return {
+        "Content-Type": "application/json",
+        ...options.headers,
+    };
 }
 
 

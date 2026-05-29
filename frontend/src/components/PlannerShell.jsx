@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Box, LinearProgress } from "@mui/material";
 
+import DayOffDrawer from "./DayOffDrawer";
 import SettingsDrawer from "./SettingsDrawer";
 import TaskDrawer from "./TaskDrawer";
 import TaskList from "./TaskList";
 import TaskToolbar from "./TaskToolbar";
 import TimelineChart from "./TimelineChart";
-import { getTimelineHeaderHeight } from "../utils/chartScale";
+import { getTimelineHeaderHeight, getTimelineMetrics } from "../utils/chartScale";
 
 
 const TASK_LIST_WIDTH_STORAGE_KEY = "planner-task-list-width";
@@ -14,15 +15,20 @@ const DEFAULT_TASK_LIST_WIDTH_PIXELS = 280;
 const MIN_TASK_LIST_WIDTH_PIXELS = 220;
 const MAX_TASK_LIST_WIDTH_PIXELS = 560;
 const DRAG_MOUSE_BUTTON = 0;
+const SCROLL_SYNC_TOLERANCE_PIXELS = 1;
+const TIMELINE_SCROLL_BEHAVIOR = "smooth";
 
 
 export default function PlannerShell(props) {
     const {
         tasks,
+        dayOffs,
         selectedTaskId,
         selectedTaskIds,
+        selectedDayOffDates,
         selectedTask,
         isDrawerOpen,
+        isDayOffDrawerOpen,
         isSettingsDrawerOpen,
         isLoading,
         isSaving,
@@ -33,6 +39,9 @@ export default function PlannerShell(props) {
         colorMode,
         zoomIndex,
         onAddTaskClick,
+        onCreateDayOffs,
+        onDayOffActionClick,
+        onDayOffDrawerClose,
         onColorModeToggle,
         onClearSelection,
         onCreateTask,
@@ -44,15 +53,22 @@ export default function PlannerShell(props) {
         onRedoTaskChange,
         onResizeTaskDates,
         onSelectTask,
+        onSelectDayOffDate,
         onSettingsClick,
         onSettingsDrawerClose,
         onUndoTaskChange,
         onUpdateTask,
         onTimelineZoom,
+        selectedDatesHaveDayOff,
     } = props;
 
     const [taskListWidth, setTaskListWidth] = useState(getInitialTaskListWidth);
+    const [hoveredTaskId, setHoveredTaskId] = useState(null);
+    const [highlightedTaskId, setHighlightedTaskId] = useState(null);
+    const isSyncingScrollRef = useRef(false);
+    const taskListPanelRef = useRef(null);
     const taskListResizeStateRef = useRef(null);
+    const timelinePanelRef = useRef(null);
     const timelineHeaderHeight = getTimelineHeaderHeight(zoomIndex);
 
     useEffect(function bindTaskListResizeListeners() {
@@ -107,44 +123,152 @@ export default function PlannerShell(props) {
         document.body.classList.add("task-list-resizing");
     }
 
+    function handleScrollTimelinePast() {
+        scrollTimelineByVisibleRange(-1);
+    }
+
+    function handleScrollTimelineFuture() {
+        scrollTimelineByVisibleRange(1);
+    }
+
+    function handleScrollTimelineToday() {
+        const panel = timelinePanelRef.current;
+
+        if (!panel) {
+            return;
+        }
+
+        const metrics = getTimelineMetrics(tasks, zoomIndex, panel.clientWidth);
+        const centeredTodayScrollLeft = getCenteredTodayScrollLeft(panel, metrics);
+
+        scrollTimelineTo(panel, centeredTodayScrollLeft);
+    }
+
+    function scrollTimelineByVisibleRange(direction) {
+        const panel = timelinePanelRef.current;
+
+        if (!panel) {
+            return;
+        }
+
+        scrollTimelineTo(panel, panel.scrollLeft + direction * panel.clientWidth);
+    }
+
+    function handleTaskHover(taskId) {
+        setHoveredTaskId(function updateHoveredTaskId(currentTaskId) {
+            if (currentTaskId === taskId) {
+                return currentTaskId;
+            }
+
+            return taskId;
+        });
+    }
+
+    function handleTaskHoverEnd() {
+        setHoveredTaskId(null);
+    }
+
+    function handleTaskHighlight(taskId) {
+        setHighlightedTaskId(taskId);
+    }
+
+    function handleClearTaskHighlight() {
+        setHoveredTaskId(null);
+        setHighlightedTaskId(null);
+    }
+
+    function handleTaskListScroll(event) {
+        syncPanelScroll(event.currentTarget, timelinePanelRef.current);
+    }
+
+    function handleTimelineScroll(event) {
+        syncPanelScroll(event.currentTarget, taskListPanelRef.current);
+    }
+
+    function syncPanelScroll(sourcePanel, targetPanel) {
+        if (!targetPanel || isSyncingScrollRef.current) {
+            return;
+        }
+
+        if (
+            Math.abs(targetPanel.scrollTop - sourcePanel.scrollTop)
+            <= SCROLL_SYNC_TOLERANCE_PIXELS
+        ) {
+            return;
+        }
+
+        isSyncingScrollRef.current = true;
+        targetPanel.scrollTop = sourcePanel.scrollTop;
+
+        window.requestAnimationFrame(function releaseScrollSync() {
+            isSyncingScrollRef.current = false;
+        });
+    }
+
+    const visibleHighlightedTaskId = highlightedTaskId || hoveredTaskId;
+
     return (
         <Box className="planner-shell">
             <TaskToolbar
                 hasSelectedTask={Boolean(selectedTaskId)}
+                hasSelectedDayOffDates={selectedDayOffDates.length > 0}
                 canEditSelectedTask={canEditSelectedTask}
                 canRedo={canRedo}
                 canUndo={canUndo}
                 isSaving={isSaving}
                 onAddTaskClick={onAddTaskClick}
+                onDayOffActionClick={onDayOffActionClick}
                 onDeleteSelectedTask={onDeleteSelectedTask}
                 onEditSelectedTask={onEditSelectedTask}
                 onRedoTaskChange={onRedoTaskChange}
                 onSettingsClick={onSettingsClick}
+                onScrollTimelineFuture={handleScrollTimelineFuture}
+                onScrollTimelinePast={handleScrollTimelinePast}
+                onScrollTimelineToday={handleScrollTimelineToday}
                 onUndoTaskChange={onUndoTaskChange}
+                selectedDatesHaveDayOff={selectedDatesHaveDayOff}
             />
             {isLoading && <LinearProgress className="planner-progress" />}
             <Box
                 className="planner-content"
-                sx={{ gridTemplateColumns: `${taskListWidth}px minmax(0, 1fr)` }}
+                sx={{
+                    gridTemplateColumns: `${taskListWidth}px minmax(0, 1fr)`,
+                    "--planner-timeline-header-height": `${timelineHeaderHeight}px`,
+                }}
             >
                 <TaskList
+                    panelRef={taskListPanelRef}
                     tasks={tasks}
+                    highlightedTaskId={visibleHighlightedTaskId}
                     selectedTaskIds={selectedTaskIds}
                     headerHeight={timelineHeaderHeight}
+                    onClearHighlight={handleClearTaskHighlight}
                     onClearSelection={onClearSelection}
+                    onHighlightTask={handleTaskHighlight}
+                    onHoverTask={handleTaskHover}
+                    onHoverTaskEnd={handleTaskHoverEnd}
+                    onPanelScroll={handleTaskListScroll}
                     onResizeStart={handleTaskListResizeStart}
                     onSelectTask={onSelectTask}
                 />
                 <TimelineChart
+                    panelRef={timelinePanelRef}
                     tasks={tasks}
+                    dayOffs={dayOffs}
+                    highlightedTaskId={visibleHighlightedTaskId}
                     isLoading={isLoading}
+                    selectedDayOffDates={selectedDayOffDates}
                     selectedTaskIds={selectedTaskIds}
                     zoomIndex={zoomIndex}
+                    onClearHighlight={handleClearTaskHighlight}
                     onClearSelection={onClearSelection}
+                    onHighlightTask={handleTaskHighlight}
                     onMoveTasks={onMoveTasks}
                     onOpenTaskEdit={onOpenTaskEdit}
+                    onPanelScroll={handleTimelineScroll}
                     onResizeTaskDates={onResizeTaskDates}
                     onSelectTask={onSelectTask}
+                    onSelectDayOffDate={onSelectDayOffDate}
                     onTimelineZoom={onTimelineZoom}
                 />
             </Box>
@@ -163,8 +287,38 @@ export default function PlannerShell(props) {
                 onClose={onSettingsDrawerClose}
                 onColorModeToggle={onColorModeToggle}
             />
+            <DayOffDrawer
+                open={isDayOffDrawerOpen}
+                isSaving={isSaving}
+                selectedDates={selectedDayOffDates}
+                onClose={onDayOffDrawerClose}
+                onCreateDayOffs={onCreateDayOffs}
+            />
         </Box>
     );
+}
+
+
+function getCenteredTodayScrollLeft(panel, metrics) {
+    const centeredScrollLeft = (
+        metrics.todayScrollLeft
+        + metrics.dayWidth / 2
+        - panel.clientWidth / 2
+    );
+    const maxScrollLeft = Math.max(0, panel.scrollWidth - panel.clientWidth);
+
+    return Math.min(Math.max(centeredScrollLeft, 0), maxScrollLeft);
+}
+
+
+function scrollTimelineTo(panel, scrollLeft) {
+    const maxScrollLeft = Math.max(0, panel.scrollWidth - panel.clientWidth);
+    const clampedScrollLeft = Math.min(Math.max(scrollLeft, 0), maxScrollLeft);
+
+    panel.scrollTo({
+        left: clampedScrollLeft,
+        behavior: TIMELINE_SCROLL_BEHAVIOR,
+    });
 }
 
 

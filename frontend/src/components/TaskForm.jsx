@@ -12,8 +12,8 @@ import {
     Typography,
 } from "@mui/material";
 
+import { ASSIGNEE_OPTIONS } from "../constants/taskOptions";
 
-const ASSIGNEE_OPTIONS = ["Unassigned", "Alice", "Bob", "Charlie"];
 const TASK_TYPE_OPTIONS = ["Planning", "Design", "Development", "Testing", "Release"];
 const TASK_LEVEL_OPTIONS = ["", "Low", "Medium", "High"];
 

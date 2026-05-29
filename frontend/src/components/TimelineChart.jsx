@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Box, Typography } from "@mui/material";
 
 import {
@@ -27,23 +27,32 @@ const SUNDAY_DAY_INDEX = 0;
 const SATURDAY_DAY_INDEX = 6;
 const ZOOM_IN_DIRECTION = 10;
 const ZOOM_OUT_DIRECTION = -10;
+const TASK_BAR_HORIZONTAL_INSET_PIXELS = 4;
+const TASK_BAR_VERTICAL_INSET_PIXELS = 6;
+const MIN_TASK_BAR_DISPLAY_WIDTH_PIXELS = 20;
+const MIN_TASK_BAR_RESIZE_WIDTH_PIXELS = 36;
 
 
 export default function TimelineChart(props) {
     const {
+        panelRef: externalPanelRef,
         tasks,
+        highlightedTaskId,
         isLoading,
         selectedTaskIds,
         zoomIndex,
+        onClearHighlight,
         onClearSelection,
+        onHighlightTask,
         onMoveTasks,
         onOpenTaskEdit,
+        onPanelScroll,
         onResizeTaskDates,
         onSelectTask,
         onTimelineZoom,
     } = props;
 
-    const panelRef = useRef(null);
+    const timelinePanelRef = useRef(null);
     const dragStateRef = useRef(null);
     const didSetInitialScrollRef = useRef(false);
     const metricsRef = useRef(null);
@@ -60,7 +69,16 @@ export default function TimelineChart(props) {
     const metrics = getTimelineMetrics(tasks, zoomIndex, panelWidth);
     const chartHeight = metrics.headerHeight + Math.max(tasks.length, 1) * metrics.rowHeight;
     const headerRowHeight = getTimelineHeaderRowHeight(metrics.headerHeight, metrics.headerRows);
+    const highlightedTaskIndex = getHighlightedTaskIndex(tasks, highlightedTaskId);
     metricsRef.current = metrics;
+
+    const setTimelinePanelElement = useCallback(function setTimelinePanelElement(panel) {
+        timelinePanelRef.current = panel;
+
+        if (externalPanelRef) {
+            externalPanelRef.current = panel;
+        }
+    }, [externalPanelRef]);
 
     useEffect(function keepTimelineZoomHandlerCurrent() {
         onTimelineZoomRef.current = onTimelineZoom;
@@ -73,7 +91,7 @@ export default function TimelineChart(props) {
     }, [onMoveTasks, onResizeTaskDates, onSelectTask]);
 
     useLayoutEffect(function trackTimelinePanelWidth() {
-        const panel = panelRef.current;
+        const panel = timelinePanelRef.current;
 
         if (!panel) {
             return undefined;
@@ -102,7 +120,7 @@ export default function TimelineChart(props) {
     }, []);
 
     useLayoutEffect(function alignScrollWithTimelineScale() {
-        const panel = panelRef.current;
+        const panel = timelinePanelRef.current;
 
         if (!panel) {
             return;
@@ -167,7 +185,7 @@ export default function TimelineChart(props) {
     }, []);
 
     useEffect(function bindWheelListener() {
-        const panel = panelRef.current;
+        const panel = timelinePanelRef.current;
 
         if (!panel) {
             return undefined;
@@ -185,9 +203,9 @@ export default function TimelineChart(props) {
                 return;
             }
 
-            if (event.shiftKey || event.deltaX !== 0) {
+            if (shouldScrollTimelineHorizontally(event)) {
                 event.preventDefault();
-                scrollTimelineVertically(panel, event.deltaY);
+                scrollTimelineHorizontally(panel, getHorizontalWheelDelta(event));
             }
         }
 
@@ -209,9 +227,10 @@ export default function TimelineChart(props) {
             return;
         }
 
+        onClearHighlight();
         onClearSelection();
 
-        const panel = panelRef.current;
+        const panel = timelinePanelRef.current;
 
         if (!panel) {
             return;
@@ -232,7 +251,7 @@ export default function TimelineChart(props) {
             return;
         }
 
-        const panel = panelRef.current;
+        const panel = timelinePanelRef.current;
 
         if (!panel) {
             return;
@@ -241,6 +260,7 @@ export default function TimelineChart(props) {
         event.preventDefault();
         event.stopPropagation();
         setTaskHoverBubble(null);
+        onHighlightTask(task.id);
 
         if (event.ctrlKey || event.metaKey) {
             onSelectTask(task.id, true);
@@ -287,7 +307,7 @@ export default function TimelineChart(props) {
             return;
         }
 
-        const panel = panelRef.current;
+        const panel = timelinePanelRef.current;
 
         if (!panel) {
             return;
@@ -296,6 +316,7 @@ export default function TimelineChart(props) {
         event.preventDefault();
         event.stopPropagation();
         setTaskHoverBubble(null);
+        onHighlightTask(task.id);
 
         if (selectedTaskIds.length > 1) {
             return;
@@ -344,6 +365,10 @@ export default function TimelineChart(props) {
         });
     }
 
+    function handleTimelineMouseLeave() {
+        setTaskHoverBubble(null);
+    }
+
     function finishTaskDrag(dragState, event) {
         dragStateRef.current = null;
         setTaskDragPreview(null);
@@ -368,9 +393,11 @@ export default function TimelineChart(props) {
 
     return (
         <Box
-            ref={panelRef}
+            ref={setTimelinePanelElement}
             className={isDragging ? "timeline-panel timeline-panel-dragging" : "timeline-panel"}
             onMouseDown={handleTimelineMouseDown}
+            onMouseLeave={handleTimelineMouseLeave}
+            onScroll={onPanelScroll}
         >
             <Box
                 className="timeline-canvas"
@@ -448,7 +475,17 @@ export default function TimelineChart(props) {
                     sx={{
                         top: `${metrics.headerHeight}px`,
                     }}
-                />
+                >
+                    {highlightedTaskIndex >= 0 && (
+                        <Box
+                            className="timeline-hover-row"
+                            sx={{
+                                top: `${highlightedTaskIndex * metrics.rowHeight}px`,
+                                height: `${metrics.rowHeight}px`,
+                            }}
+                        />
+                    )}
+                </Box>
                 <Box
                     className="timeline-bars"
                     sx={{
@@ -457,8 +494,12 @@ export default function TimelineChart(props) {
                 >
                     {metrics.bars.map(function renderTaskBar(bar) {
                         const isSelected = selectedTaskIds.includes(bar.task.id);
-                        const canResizeTask = selectedTaskIds.length <= 1;
                         const taskBarLayout = getTaskBarLayout(bar, taskDragPreview);
+                        const taskBarVisualLayout = getTaskBarVisualLayout(taskBarLayout);
+                        const canResizeTask = (
+                            selectedTaskIds.length <= 1
+                            && taskBarVisualLayout.width >= MIN_TASK_BAR_RESIZE_WIDTH_PIXELS
+                        );
 
                         return (
                             <Box
@@ -467,9 +508,9 @@ export default function TimelineChart(props) {
                                 tabIndex={0}
                                 className={isSelected ? "task-bar task-bar-selected" : "task-bar"}
                                 sx={{
-                                    left: `${taskBarLayout.left}px`,
-                                    top: `${taskBarLayout.top + 6}px`,
-                                    width: `${taskBarLayout.width}px`,
+                                    left: `${taskBarVisualLayout.left}px`,
+                                    top: `${taskBarVisualLayout.top}px`,
+                                    width: `${taskBarVisualLayout.width}px`,
                                     backgroundColor: getTaskColor(bar.task),
                                 }}
                                 onDoubleClick={function openTaskEdit(event) {
@@ -488,6 +529,7 @@ export default function TimelineChart(props) {
                                 onMouseLeave={handleTaskBarMouseLeave}
                                 onKeyDown={function handleTaskBarKeyDown(event) {
                                     if (event.key === "Enter" || event.key === " ") {
+                                        onHighlightTask(bar.task.id);
                                         onSelectTask(bar.task.id, event.ctrlKey || event.metaKey);
                                     }
                                 }}
@@ -797,6 +839,23 @@ function getTaskBarLayout(bar, taskDragPreview) {
 }
 
 
+function getTaskBarVisualLayout(taskBarLayout) {
+    const horizontalInset = Math.min(
+        TASK_BAR_HORIZONTAL_INSET_PIXELS,
+        Math.max(0, (taskBarLayout.width - MIN_TASK_BAR_DISPLAY_WIDTH_PIXELS) / 2),
+    );
+
+    return {
+        left: taskBarLayout.left + horizontalInset,
+        top: taskBarLayout.top + TASK_BAR_VERTICAL_INSET_PIXELS,
+        width: Math.max(
+            taskBarLayout.width - horizontalInset * 2,
+            MIN_TASK_BAR_DISPLAY_WIDTH_PIXELS,
+        ),
+    };
+}
+
+
 function getResizePreviewLayout(bar, taskDragPreview) {
     if (taskDragPreview.resizeEdge === START_RESIZE_EDGE) {
         const pixelDelta = Math.min(
@@ -824,6 +883,17 @@ function getResizePreviewLayout(bar, taskDragPreview) {
 }
 
 
+function getHighlightedTaskIndex(tasks, highlightedTaskId) {
+    if (!highlightedTaskId) {
+        return -1;
+    }
+
+    return tasks.findIndex(function matchHighlightedTask(task) {
+        return task.id === highlightedTaskId;
+    });
+}
+
+
 function getWheelZoomDirection(event) {
     if (event.deltaY > 0) {
         return ZOOM_OUT_DIRECTION;
@@ -833,17 +903,31 @@ function getWheelZoomDirection(event) {
 }
 
 
+function shouldScrollTimelineHorizontally(event) {
+    return event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY);
+}
+
+
+function getHorizontalWheelDelta(event) {
+    if (event.deltaX !== 0) {
+        return event.deltaX;
+    }
+
+    return event.deltaY;
+}
+
+
 function getTaskColor(task) {
     return getColorFromTaskType(task.taskType);
 }
 
 
-function scrollTimelineVertically(panel, deltaY) {
-    if (deltaY === 0) {
+function scrollTimelineHorizontally(panel, deltaX) {
+    if (deltaX === 0) {
         return;
     }
 
-    panel.scrollTop += deltaY;
+    panel.scrollLeft += deltaX;
 }
 
 

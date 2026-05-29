@@ -1,10 +1,13 @@
 import AddIcon from "@mui/icons-material/Add";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import RedoIcon from "@mui/icons-material/Redo";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
+import TodayOutlinedIcon from "@mui/icons-material/TodayOutlined";
 import UndoIcon from "@mui/icons-material/Undo";
-import { Box, Button, Typography } from "@mui/material";
+import { Box, Button, IconButton, Tooltip, Typography } from "@mui/material";
 
 
 export default function TaskToolbar(props) {
@@ -19,6 +22,9 @@ export default function TaskToolbar(props) {
         onEditSelectedTask,
         onRedoTaskChange,
         onSettingsClick,
+        onScrollTimelineFuture,
+        onScrollTimelinePast,
+        onScrollTimelineToday,
         onUndoTaskChange,
     } = props;
 
@@ -28,6 +34,36 @@ export default function TaskToolbar(props) {
                 <Typography variant="h6" component="h1" className="toolbar-title">
                     Project Planner
                 </Typography>
+                <Box className="toolbar-timeline-navigation" aria-label="Timeline navigation">
+                    <Tooltip title="Move timeline to the past">
+                        <IconButton
+                            className="toolbar-timeline-icon-button"
+                            size="small"
+                            aria-label="Move timeline to the past"
+                            onClick={onScrollTimelinePast}
+                        >
+                            <ChevronLeftIcon fontSize="small" />
+                        </IconButton>
+                    </Tooltip>
+                    <Button
+                        className="toolbar-today-button"
+                        variant="outlined"
+                        startIcon={<TodayOutlinedIcon fontSize="small" />}
+                        onClick={onScrollTimelineToday}
+                    >
+                        TODAY
+                    </Button>
+                    <Tooltip title="Move timeline to the future">
+                        <IconButton
+                            className="toolbar-timeline-icon-button"
+                            size="small"
+                            aria-label="Move timeline to the future"
+                            onClick={onScrollTimelineFuture}
+                        >
+                            <ChevronRightIcon fontSize="small" />
+                        </IconButton>
+                    </Tooltip>
+                </Box>
             </Box>
             <Box className="toolbar-actions">
                 <Button

@@ -82,7 +82,6 @@ export default function PlannerShell(props) {
     );
     const [selectedAssigneeFilters, setSelectedAssigneeFilters] = useState([]);
     const [assigneeSortDirection, setAssigneeSortDirection] = useState(ASSIGNEE_SORT_NONE);
-    const [hoveredTaskId, setHoveredTaskId] = useState(null);
     const [highlightedTaskId, setHighlightedTaskId] = useState(null);
     const isSyncingScrollRef = useRef(false);
     const taskListPanelRef = useRef(null);
@@ -189,26 +188,11 @@ export default function PlannerShell(props) {
         scrollTimelineTo(panel, panel.scrollLeft + direction * panel.clientWidth);
     }
 
-    function handleTaskHover(taskId) {
-        setHoveredTaskId(function updateHoveredTaskId(currentTaskId) {
-            if (currentTaskId === taskId) {
-                return currentTaskId;
-            }
-
-            return taskId;
-        });
-    }
-
-    function handleTaskHoverEnd() {
-        setHoveredTaskId(null);
-    }
-
     function handleTaskHighlight(taskId) {
         setHighlightedTaskId(taskId);
     }
 
     function handleClearTaskHighlight() {
-        setHoveredTaskId(null);
         setHighlightedTaskId(null);
     }
 
@@ -280,7 +264,8 @@ export default function PlannerShell(props) {
         });
     }
 
-    const visibleHighlightedTaskId = highlightedTaskId || hoveredTaskId;
+    const taskListHighlightedTaskId = highlightedTaskId;
+    const timelineHighlightedTaskId = highlightedTaskId;
 
     return (
         <Box className="planner-shell">
@@ -317,7 +302,7 @@ export default function PlannerShell(props) {
                     tasks={displayedTasks}
                     assigneeFilterOptions={assigneeFilterOptions}
                     assigneeSortDirection={assigneeSortDirection}
-                    highlightedTaskId={visibleHighlightedTaskId}
+                    highlightedTaskId={taskListHighlightedTaskId}
                     isCollapsed={isTaskListCollapsed}
                     selectedAssigneeFilters={selectedAssigneeFilters}
                     selectedTaskIds={selectedTaskIds}
@@ -328,8 +313,6 @@ export default function PlannerShell(props) {
                     onClearHighlight={handleClearTaskHighlight}
                     onClearSelection={onClearSelection}
                     onHighlightTask={handleTaskHighlight}
-                    onHoverTask={handleTaskHover}
-                    onHoverTaskEnd={handleTaskHoverEnd}
                     onPanelScroll={handleTaskListScroll}
                     onResizeStart={handleTaskListResizeStart}
                     onSelectTask={onSelectTask}
@@ -348,7 +331,7 @@ export default function PlannerShell(props) {
                     panelRef={timelinePanelRef}
                     tasks={displayedTasks}
                     dayOffs={dayOffs}
-                    highlightedTaskId={visibleHighlightedTaskId}
+                    highlightedTaskId={timelineHighlightedTaskId}
                     isLoading={isLoading}
                     isRowReorderDisabled={isTaskViewFilteredOrSorted}
                     selectedDayOffDates={selectedDayOffDates}

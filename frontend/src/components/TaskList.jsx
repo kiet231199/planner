@@ -52,8 +52,6 @@ export default function TaskList(props) {
         onClearHighlight,
         onClearSelection,
         onHighlightTask,
-        onHoverTask,
-        onHoverTaskEnd,
         onPanelScroll,
         onResizeStart,
         onSelectTask,
@@ -127,19 +125,16 @@ export default function TaskList(props) {
         handleFilterMenuClose();
     }
 
-    function handleTaskListMouseMove(event) {
-        if (!(event.target instanceof Element)) {
-            return;
+    function handleTaskSelection(event, task) {
+        const selectionMode = getTaskSelectionMode(event);
+
+        if (selectionMode.isMultiSelect || selectionMode.isRangeSelect) {
+            onClearHighlight();
+        } else {
+            onHighlightTask(task.id);
         }
 
-        const taskRow = event.target.closest(".task-list-row");
-
-        if (!taskRow) {
-            onHoverTaskEnd();
-            return;
-        }
-
-        onHoverTask(taskRow.dataset.taskId);
+        onSelectTask(task.id, selectionMode, tasks);
     }
 
     if (isCollapsed) {
@@ -157,8 +152,6 @@ export default function TaskList(props) {
             ref={panelRef}
             className={getTaskListPanelClassName(isCollapsed)}
             onMouseDown={handleTaskListMouseDown}
-            onMouseLeave={onHoverTaskEnd}
-            onMouseMove={handleTaskListMouseMove}
             onScroll={onPanelScroll}
         >
             <Box
@@ -236,8 +229,8 @@ export default function TaskList(props) {
             <List disablePadding>
                 {tasks.map(function renderTask(task) {
                     const isSelected = selectedTaskIds.includes(task.id);
-                    const isHovered = highlightedTaskId === task.id;
-                    const rowClassName = getTaskListRowClassName(isHovered);
+                    const isHighlighted = highlightedTaskId === task.id || isSelected;
+                    const rowClassName = getTaskListRowClassName(isHighlighted);
                     const assigneeLabel = getAssigneeLabel(task);
                     const avatarInitials = getAssigneeInitials(assigneeLabel);
                     const avatarTitle = getAssigneeAvatarTitle(assigneeLabel);
@@ -250,8 +243,7 @@ export default function TaskList(props) {
                             selected={isSelected}
                             className={rowClassName}
                             onClick={function selectTask(event) {
-                                onHighlightTask(task.id);
-                                onSelectTask(task.id, event.ctrlKey || event.metaKey);
+                                handleTaskSelection(event, task);
                             }}
                         >
                             <Box className="task-list-cell task-list-name-cell">
@@ -323,6 +315,14 @@ function getAssigneeSortAriaValue(assigneeSortDirection) {
     }
 
     return ASSIGNEE_SORT_NONE;
+}
+
+
+function getTaskSelectionMode(event) {
+    return {
+        isMultiSelect: event.ctrlKey || event.metaKey,
+        isRangeSelect: event.shiftKey,
+    };
 }
 
 

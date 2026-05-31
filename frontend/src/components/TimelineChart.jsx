@@ -78,7 +78,7 @@ export default function TimelineChart(props) {
     const metrics = getTimelineMetrics(tasks, zoomIndex, panelWidth);
     const chartHeight = metrics.headerHeight + Math.max(tasks.length, 1) * metrics.rowHeight;
     const headerRowHeight = getTimelineHeaderRowHeight(metrics.headerHeight, metrics.headerRows);
-    const highlightedTaskIndex = getHighlightedTaskIndex(tasks, highlightedTaskId);
+    const taskRowHighlights = getTaskRowHighlights(tasks, selectedTaskIds, highlightedTaskId);
     const selectedDayOffDateSet = new Set(selectedDayOffDates);
     const selectedDayHighlights = getSelectedDayHighlights(selectedDayOffDates, metrics);
     const dayOffHighlights = getDayOffHighlights(dayOffs, tasks, metrics);
@@ -278,17 +278,21 @@ export default function TimelineChart(props) {
         event.preventDefault();
         event.stopPropagation();
         setTaskHoverBubble(null);
-        onHighlightTask(task.id);
 
-        if (event.ctrlKey || event.metaKey) {
-            onSelectTask(task.id, true);
+        const selectionMode = getTaskSelectionMode(event);
+
+        if (selectionMode.isMultiSelect || selectionMode.isRangeSelect) {
+            onClearHighlight();
+            onSelectTask(task.id, selectionMode, tasks);
             return;
         }
+
+        onHighlightTask(task.id);
 
         const taskIds = getTaskInteractionIds(tasks, selectedTaskIds, task.id);
 
         if (!selectedTaskIds.includes(task.id)) {
-            onSelectTask(task.id, false);
+            onSelectTask(task.id, selectionMode, tasks);
         }
 
         dragStateRef.current = {
@@ -418,7 +422,7 @@ export default function TimelineChart(props) {
             return;
         }
 
-        onSelectTask(task.id, false);
+        onSelectTask(task.id);
 
         dragStateRef.current = {
             type: TASK_DRAG_TYPE_RESIZE,
@@ -644,15 +648,18 @@ export default function TimelineChart(props) {
                         top: `${metrics.headerHeight}px`,
                     }}
                 >
-                    {highlightedTaskIndex >= 0 && (
-                        <Box
-                            className="timeline-hover-row"
-                            sx={{
-                                top: `${highlightedTaskIndex * metrics.rowHeight}px`,
-                                height: `${metrics.rowHeight}px`,
-                            }}
-                        />
-                    )}
+                    {taskRowHighlights.map(function renderTaskRowHighlight(rowHighlight) {
+                        return (
+                            <Box
+                                key={rowHighlight.taskId}
+                                className="timeline-hover-row"
+                                sx={{
+                                    top: `${rowHighlight.index * metrics.rowHeight}px`,
+                                    height: `${metrics.rowHeight}px`,
+                                }}
+                            />
+                        );
+                    })}
                 </Box>
                 <Box
                     className="timeline-bars"
@@ -697,8 +704,20 @@ export default function TimelineChart(props) {
                                 onMouseLeave={handleTaskBarMouseLeave}
                                 onKeyDown={function handleTaskBarKeyDown(event) {
                                     if (event.key === "Enter" || event.key === " ") {
-                                        onHighlightTask(bar.task.id);
-                                        onSelectTask(bar.task.id, event.ctrlKey || event.metaKey);
+                                        const selectionMode = getTaskSelectionMode(event);
+
+                                        event.preventDefault();
+
+                                        if (
+                                            selectionMode.isMultiSelect
+                                            || selectionMode.isRangeSelect
+                                        ) {
+                                            onClearHighlight();
+                                        } else {
+                                            onHighlightTask(bar.task.id);
+                                        }
+
+                                        onSelectTask(bar.task.id, selectionMode, tasks);
                                     }
                                 }}
                             >
@@ -824,6 +843,14 @@ function getTimelineHeaderCellClassName(isSelectableDayCell, isSelectedDayCell) 
 
 
 function getDaySelectionMode(event) {
+    return {
+        isMultiSelect: event.ctrlKey || event.metaKey,
+        isRangeSelect: event.shiftKey,
+    };
+}
+
+
+function getTaskSelectionMode(event) {
     return {
         isMultiSelect: event.ctrlKey || event.metaKey,
         isRangeSelect: event.shiftKey,
@@ -1190,14 +1217,25 @@ function getResizePreviewLayout(bar, taskDragPreview) {
 }
 
 
-function getHighlightedTaskIndex(tasks, highlightedTaskId) {
-    if (!highlightedTaskId) {
-        return -1;
+function getTaskRowHighlights(tasks, selectedTaskIds, highlightedTaskId) {
+    const highlightedTaskIds = new Set(selectedTaskIds);
+
+    if (highlightedTaskId) {
+        highlightedTaskIds.add(highlightedTaskId);
     }
 
-    return tasks.findIndex(function matchHighlightedTask(task) {
-        return task.id === highlightedTaskId;
-    });
+    return tasks
+        .map(function mapTaskRowHighlight(task, index) {
+            if (!highlightedTaskIds.has(task.id)) {
+                return null;
+            }
+
+            return {
+                taskId: task.id,
+                index,
+            };
+        })
+        .filter(Boolean);
 }
 
 

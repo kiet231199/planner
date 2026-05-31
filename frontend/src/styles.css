@@ -209,10 +209,13 @@ body.task-list-resizing {
 }
 
 .task-list-row:not(.Mui-selected):hover {
-    background-color: transparent !important;
+    background-color: var(--planner-row-hover-color) !important;
 }
 
 .task-list-row-hovered,
+.task-list-row.Mui-selected,
+.task-list-row.Mui-selected:hover,
+.task-list-row.Mui-selected.Mui-focusVisible,
 .task-list-row-hovered:not(.Mui-selected):hover {
     background-color: var(--planner-row-hover-color) !important;
 }

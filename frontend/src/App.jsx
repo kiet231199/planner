@@ -102,6 +102,7 @@ export default function App() {
     const dayOffsRef = useRef([]);
     const selectedTaskIdsRef = useRef([]);
     const selectedDayOffDatesRef = useRef([]);
+    const lastSelectedTaskIdRef = useRef(null);
     const lastSelectedDayOffDateRef = useRef(null);
     const undoStackRef = useRef([]);
     const redoStackRef = useRef([]);
@@ -497,6 +498,8 @@ export default function App() {
     }
 
     function handleOpenTaskEdit(taskId) {
+        lastSelectedTaskIdRef.current = taskId;
+        selectedTaskIdsRef.current = [taskId];
         setSelectedTaskIds([taskId]);
         setDrawerMode("edit");
         setIsDrawerOpen(true);
@@ -709,20 +712,25 @@ export default function App() {
         });
     }
 
-    function handleSelectTask(taskId, isMultiSelect) {
-        if (isMultiSelect) {
-            setSelectedTaskIds(function toggleTaskSelection(currentTaskIds) {
-                return toggleSelectedTaskId(currentTaskIds, taskId);
-            });
-            return;
-        }
+    function handleSelectTask(taskId, selectionMode = getDefaultSelectionMode(), taskOrder = []) {
+        const taskOrderIds = getTaskOrderIds(taskOrder, tasksRef.current);
 
-        setSelectedTaskIds(function selectSingleTask(currentTaskIds) {
-            if (currentTaskIds.length === 1 && currentTaskIds[0] === taskId) {
-                return currentTaskIds;
+        setSelectedTaskIds(function updateSelectedTaskIds(currentTaskIds) {
+            const nextTaskIds = getNextSelectedTaskIds(
+                currentTaskIds,
+                taskId,
+                selectionMode,
+                lastSelectedTaskIdRef.current,
+                taskOrderIds,
+            );
+
+            if (!selectionMode.isRangeSelect) {
+                lastSelectedTaskIdRef.current = taskId;
             }
 
-            return [taskId];
+            selectedTaskIdsRef.current = nextTaskIds;
+
+            return nextTaskIds;
         });
     }
 
@@ -753,9 +761,17 @@ export default function App() {
                 return task.id;
             }));
 
-            return currentSelectedTaskIds.filter(function keepTaskId(taskId) {
+            const nextSelectedTaskIds = currentSelectedTaskIds.filter(function keepTaskId(taskId) {
                 return loadedTaskIds.has(taskId);
             });
+
+            if (lastSelectedTaskIdRef.current && !loadedTaskIds.has(lastSelectedTaskIdRef.current)) {
+                lastSelectedTaskIdRef.current = null;
+            }
+
+            selectedTaskIdsRef.current = nextSelectedTaskIds;
+
+            return nextSelectedTaskIds;
         });
     }
 
@@ -813,6 +829,7 @@ export default function App() {
                     onRedoTaskChange={handleRedoTaskChange}
                     onResizeTaskDates={handleResizeTaskDates}
                     onClearSelection={function clearSelection() {
+                        lastSelectedTaskIdRef.current = null;
                         lastSelectedDayOffDateRef.current = null;
                         selectedTaskIdsRef.current = [];
                         selectedDayOffDatesRef.current = [];
@@ -1094,6 +1111,94 @@ function toggleSelectedTaskId(selectedTaskIds, taskId) {
     }
 
     return [...selectedTaskIds, taskId];
+}
+
+
+function getDefaultSelectionMode() {
+    return {
+        isMultiSelect: false,
+        isRangeSelect: false,
+    };
+}
+
+
+function getNextSelectedTaskIds(
+    currentTaskIds,
+    taskId,
+    selectionMode,
+    anchorTaskId,
+    taskOrderIds,
+) {
+    if (selectionMode.isRangeSelect) {
+        const rangeTaskIds = getTaskRangeIds(taskOrderIds, anchorTaskId || taskId, taskId);
+
+        if (selectionMode.isMultiSelect) {
+            return sortTaskIdsByTaskOrder(
+                [...new Set([...currentTaskIds, ...rangeTaskIds])],
+                taskOrderIds,
+            );
+        }
+
+        return rangeTaskIds;
+    }
+
+    if (selectionMode.isMultiSelect) {
+        return toggleSelectedTaskId(currentTaskIds, taskId);
+    }
+
+    return [taskId];
+}
+
+
+function getTaskOrderIds(taskOrder, fallbackTasks) {
+    const primaryTaskIds = taskOrder.map(function mapTaskOrderId(task) {
+        if (typeof task === "string") {
+            return task;
+        }
+
+        return task.id;
+    });
+
+    if (primaryTaskIds.length > 0) {
+        return primaryTaskIds;
+    }
+
+    return fallbackTasks.map(function mapFallbackTaskId(task) {
+        return task.id;
+    });
+}
+
+
+function getTaskRangeIds(taskOrderIds, firstTaskId, secondTaskId) {
+    const firstTaskIndex = taskOrderIds.indexOf(firstTaskId);
+    const secondTaskIndex = taskOrderIds.indexOf(secondTaskId);
+
+    if (firstTaskIndex < 0 || secondTaskIndex < 0) {
+        return [secondTaskId];
+    }
+
+    const startIndex = Math.min(firstTaskIndex, secondTaskIndex);
+    const stopIndex = Math.max(firstTaskIndex, secondTaskIndex);
+
+    return taskOrderIds.slice(startIndex, stopIndex + 1);
+}
+
+
+function sortTaskIdsByTaskOrder(taskIds, taskOrderIds) {
+    const taskOrderIndexMap = new Map(taskOrderIds.map(function mapTaskOrderIndex(taskId, index) {
+        return [taskId, index];
+    }));
+
+    return [...taskIds].sort(function compareTaskOrder(firstTaskId, secondTaskId) {
+        const firstTaskIndex = taskOrderIndexMap.get(firstTaskId);
+        const secondTaskIndex = taskOrderIndexMap.get(secondTaskId);
+
+        if (firstTaskIndex === undefined || secondTaskIndex === undefined) {
+            return taskIds.indexOf(firstTaskId) - taskIds.indexOf(secondTaskId);
+        }
+
+        return firstTaskIndex - secondTaskIndex;
+    });
 }
 
 

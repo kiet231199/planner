@@ -79,6 +79,10 @@ body.task-list-resizing {
 }
 
 .planner-shell {
+    --planner-assignee-column-width: 128px;
+    --planner-collapse-button-size: 36px;
+    --planner-collapse-button-gap: 8px;
+    --planner-scrollbar-reserved-size: 16px;
     --planner-task-text-size: 0.86rem;
     --planner-task-row-height: 38px;
     --planner-timeline-header-row-height: 38px;
@@ -134,6 +138,7 @@ body.task-list-resizing {
 }
 
 .planner-content {
+    position: relative;
     display: grid;
     grid-template-columns: 280px minmax(0, 1fr);
     min-height: 0;
@@ -150,12 +155,19 @@ body.task-list-resizing {
     box-shadow: 10px 0 14px -10px var(--planner-sticky-column-shadow-color);
 }
 
+.task-list-panel-collapsed {
+    overflow: hidden;
+    border-right: 0;
+    box-shadow: none;
+    pointer-events: none;
+}
+
 .task-list-header {
     position: sticky;
     top: 0;
     z-index: 4;
     display: grid;
-    grid-template-columns: minmax(124px, 1fr);
+    grid-template-columns: minmax(124px, 1fr) var(--planner-assignee-column-width);
     align-items: center;
     height: 38px;
     border-bottom: 1px solid var(--planner-border-color);
@@ -187,7 +199,7 @@ body.task-list-resizing {
 
 .task-list-row {
     display: grid !important;
-    grid-template-columns: minmax(124px, 1fr);
+    grid-template-columns: minmax(124px, 1fr) var(--planner-assignee-column-width);
     height: var(--planner-task-row-height);
     min-height: 38px !important;
     padding: 0 !important;
@@ -209,11 +221,41 @@ body.task-list-resizing {
     gap: 8px;
 }
 
-.task-color-swatch {
+.task-list-assignee-heading {
+    gap: 4px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.task-list-heading-label {
+    min-width: 0;
+    overflow: hidden;
+    font-size: var(--planner-task-text-size) !important;
+    font-weight: 700 !important;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.task-list-sort-icon {
     flex: 0 0 auto;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
+    font-size: 0.9rem !important;
+}
+
+.task-list-filter-button {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    margin-left: auto !important;
+}
+
+.task-assignee-avatar {
+    flex: 0 0 auto;
+    width: 24px !important;
+    height: 24px !important;
+    border: 1px solid var(--planner-border-color);
+    font-size: 0.72rem !important;
+    font-weight: 700;
+    color: #ffffff;
 }
 
 .task-list-row .task-list-name {
@@ -223,6 +265,23 @@ body.task-list-resizing {
     color: var(--planner-text-color);
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.task-list-assignee-cell {
+    justify-content: flex-start;
+}
+
+.task-list-row .task-list-assignee {
+    min-width: 0;
+    overflow: hidden;
+    font-size: var(--planner-task-text-size);
+    color: var(--planner-text-color);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.task-list-filter-menu .MuiListItemText-primary {
+    font-size: 0.86rem;
 }
 
 .task-list-resize-handle {
@@ -237,6 +296,30 @@ body.task-list-resizing {
 
 .task-list-resize-handle:hover {
     background: var(--planner-row-border-color);
+}
+
+.task-list-collapse-button {
+    position: absolute !important;
+    bottom: calc(var(--planner-scrollbar-reserved-size) + var(--planner-collapse-button-gap));
+    left: var(--planner-task-list-boundary);
+    z-index: 12;
+    width: var(--planner-collapse-button-size) !important;
+    height: var(--planner-collapse-button-size) !important;
+    border: 1px solid var(--planner-task-selected-outline) !important;
+    border-radius: 6px !important;
+    background: var(--planner-surface-color) !important;
+    box-shadow: 0 4px 14px var(--planner-sticky-column-shadow-color);
+    color: var(--planner-task-selected-outline) !important;
+    transform: translateX(var(--planner-collapse-button-gap));
+}
+
+.task-list-collapse-button:hover {
+    background: var(--planner-row-hover-color) !important;
+    color: var(--planner-task-selected-outline) !important;
+}
+
+.task-list-collapse-icon-left {
+    transform: scaleX(-1);
 }
 
 .timeline-panel {

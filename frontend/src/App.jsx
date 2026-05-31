@@ -17,6 +17,7 @@ import {
     MIN_ZOOM_INDEX,
     addDaysToDateString,
 } from "./utils/chartScale";
+import { DAY_OFF_ALL_ASSIGNEES } from "./constants/taskOptions";
 
 
 const COLOR_MODE_STORAGE_KEY = "planner-color-mode";
@@ -87,6 +88,7 @@ export default function App() {
     const [isDayOffDrawerOpen, setIsDayOffDrawerOpen] = useState(false);
     const [isSettingsDrawerOpen, setIsSettingsDrawerOpen] = useState(false);
     const [drawerMode, setDrawerMode] = useState("create");
+    const [dayOffDrawerMode, setDayOffDrawerMode] = useState("create");
     const [isLoading, setIsLoading] = useState(true);
     const [isDayOffSaving, setIsDayOffSaving] = useState(false);
     const isSaving = isDayOffSaving;
@@ -110,6 +112,9 @@ export default function App() {
     const theme = useMemo(function createThemeForColorMode() {
         return createPlannerTheme(colorMode);
     }, [colorMode]);
+    const dayOffDrawerInitialValues = useMemo(function createDayOffDrawerInitialValues() {
+        return getDayOffDrawerInitialValues(dayOffs, selectedDayOffDates);
+    }, [dayOffs, selectedDayOffDates]);
 
     useEffect(function syncDocumentColorMode() {
         document.documentElement.dataset.colorMode = colorMode;
@@ -388,12 +393,14 @@ export default function App() {
             return;
         }
 
+        setDayOffDrawerMode("create");
         setIsDayOffDrawerOpen(true);
     }
 
     async function handleCreateDayOffs(dayOffDraft) {
         const beforeDayOffs = dayOffsRef.current;
         const beforeSelectedDayOffDates = selectedDayOffDatesRef.current;
+        const historyLabel = getDayOffHistoryLabel(dayOffDrawerMode);
 
         setIsDayOffSaving(true);
 
@@ -405,7 +412,7 @@ export default function App() {
                 updatedDayOffs,
                 beforeSelectedDayOffDates,
                 beforeSelectedDayOffDates,
-                "Add day-off",
+                historyLabel,
             );
             setIsDayOffDrawerOpen(false);
 
@@ -467,6 +474,17 @@ export default function App() {
 
     function handleDayOffDrawerClose() {
         setIsDayOffDrawerOpen(false);
+    }
+
+    function handleOpenDayOffEdit(date) {
+        const currentSelectedDates = selectedDayOffDatesRef.current;
+        const nextSelectedDates = getDayOffEditSelectedDates(currentSelectedDates, date);
+
+        lastSelectedDayOffDateRef.current = date;
+        selectedDayOffDatesRef.current = nextSelectedDates;
+        setSelectedDayOffDates(nextSelectedDates);
+        setDayOffDrawerMode("edit");
+        setIsDayOffDrawerOpen(true);
     }
 
     function handleEditSelectedTask() {
@@ -770,6 +788,8 @@ export default function App() {
                     canRedo={historyState.canRedo}
                     canUndo={historyState.canUndo}
                     drawerMode={drawerMode}
+                    dayOffDrawerMode={dayOffDrawerMode}
+                    dayOffInitialValues={dayOffDrawerInitialValues}
                     colorMode={colorMode}
                     selectedTask={selectedTask}
                     zoomIndex={zoomIndex}
@@ -789,6 +809,7 @@ export default function App() {
                     canEditSelectedTask={canEditSelectedTask}
                     onMoveTasks={handleMoveTasks}
                     onOpenTaskEdit={handleOpenTaskEdit}
+                    onOpenDayOffEdit={handleOpenDayOffEdit}
                     onRedoTaskChange={handleRedoTaskChange}
                     onResizeTaskDates={handleResizeTaskDates}
                     onClearSelection={function clearSelection() {
@@ -1299,6 +1320,80 @@ function hasSameDayOffValues(dayOff, expectedDayOff) {
         && (dayOff.description || "") === (expectedDayOff.description || "")
         && hasSameStringList(dayOff.assignees, expectedDayOff.assignees)
     );
+}
+
+
+function getDayOffDrawerInitialValues(dayOffs, selectedDates) {
+    const selectedDayOffs = selectedDates.map(function mapSelectedDayOff(date) {
+        return findDayOffByDate(dayOffs, date);
+    });
+
+    return {
+        name: getSharedDayOffTextValue(selectedDayOffs, "name"),
+        description: getSharedDayOffTextValue(selectedDayOffs, "description"),
+        assignees: getSharedDayOffAssignees(selectedDayOffs),
+    };
+}
+
+
+function findDayOffByDate(dayOffs, date) {
+    return dayOffs.find(function matchDayOffDate(dayOff) {
+        return dayOff.date === date;
+    }) || null;
+}
+
+
+function getSharedDayOffTextValue(selectedDayOffs, fieldName) {
+    if (selectedDayOffs.length === 0 || !selectedDayOffs[0]) {
+        return "";
+    }
+
+    const firstValue = selectedDayOffs[0][fieldName] || "";
+    const hasSameValue = selectedDayOffs.every(function matchDayOffValue(dayOff) {
+        return dayOff && (dayOff[fieldName] || "") === firstValue;
+    });
+
+    if (!hasSameValue) {
+        return "";
+    }
+
+    return firstValue;
+}
+
+
+function getSharedDayOffAssignees(selectedDayOffs) {
+    if (selectedDayOffs.length === 0 || !selectedDayOffs[0]) {
+        return [DAY_OFF_ALL_ASSIGNEES];
+    }
+
+    const firstAssignees = selectedDayOffs[0].assignees;
+    const hasSameAssignees = selectedDayOffs.every(function matchDayOffAssignees(dayOff) {
+        return dayOff && hasSameStringList(dayOff.assignees, firstAssignees);
+    });
+
+    if (!hasSameAssignees) {
+        return [DAY_OFF_ALL_ASSIGNEES];
+    }
+
+    return [...firstAssignees];
+}
+
+
+function getDayOffHistoryLabel(dayOffDrawerMode) {
+    if (dayOffDrawerMode === "edit") {
+        return "Edit day-off";
+    }
+
+    return "Add day-off";
+}
+
+
+function getDayOffEditSelectedDates(currentSelectedDates, date) {
+    if (currentSelectedDates.includes(date)) {
+        return currentSelectedDates;
+    }
+
+    return [date];
 }
 
 

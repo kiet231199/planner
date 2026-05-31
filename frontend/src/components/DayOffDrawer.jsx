@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import CloseIcon from "@mui/icons-material/Close";
 import {
     Box,
@@ -19,7 +19,11 @@ import {
 import { ASSIGNEE_OPTIONS, DAY_OFF_ALL_ASSIGNEES } from "../constants/taskOptions";
 
 
-const DAY_OFF_ASSIGNEE_OPTIONS = [DAY_OFF_ALL_ASSIGNEES, ...ASSIGNEE_OPTIONS];
+const DAY_OFF_EXCLUDED_ASSIGNEE = "Unassigned";
+const DAY_OFF_ASSIGNEE_OPTIONS = [
+    DAY_OFF_ALL_ASSIGNEES,
+    ...ASSIGNEE_OPTIONS.filter(isDayOffAssigneeOption),
+];
 
 const DEFAULT_FORM_VALUES = {
     name: "",
@@ -32,12 +36,24 @@ export default function DayOffDrawer(props) {
     const {
         open,
         isSaving,
+        mode = "create",
+        initialValues = DEFAULT_FORM_VALUES,
         selectedDates = [],
         onClose,
         onCreateDayOffs,
     } = props;
     const [formValues, setFormValues] = useState(DEFAULT_FORM_VALUES);
     const [formErrors, setFormErrors] = useState({});
+    const isEditMode = mode === "edit";
+
+    useEffect(function syncFormValuesWhenOpened() {
+        if (!open) {
+            return;
+        }
+
+        setFormValues(getInitialFormValues(initialValues));
+        setFormErrors({});
+    }, [open, initialValues]);
 
     async function handleSubmit(event) {
         event.preventDefault();
@@ -92,7 +108,7 @@ export default function DayOffDrawer(props) {
     }
 
     function resetForm() {
-        setFormValues(DEFAULT_FORM_VALUES);
+        setFormValues(getInitialFormValues(initialValues));
         setFormErrors({});
     }
 
@@ -105,7 +121,9 @@ export default function DayOffDrawer(props) {
         >
             <Box className="day-off-drawer-header">
                 <Box>
-                    <Typography variant="h6">Add Day-off</Typography>
+                    <Typography variant="h6">
+                        {isEditMode ? "Edit Day-off" : "Add Day-off"}
+                    </Typography>
                     <Typography variant="body2" color="text.secondary">
                         {getSelectedDateLabel(selectedDates)}
                     </Typography>
@@ -188,6 +206,37 @@ function validateForm(formValues) {
     }
 
     return errors;
+}
+
+
+function getInitialFormValues(initialValues) {
+    return {
+        name: initialValues.name || "",
+        description: initialValues.description || "",
+        assignees: getSupportedDayOffAssignees(initialValues.assignees),
+    };
+}
+
+
+function getSupportedDayOffAssignees(assignees) {
+    if (!assignees || assignees.length === 0) {
+        return [DAY_OFF_ALL_ASSIGNEES];
+    }
+
+    const supportedAssignees = assignees.filter(function keepSupportedAssignee(assignee) {
+        return DAY_OFF_ASSIGNEE_OPTIONS.includes(assignee);
+    });
+
+    if (supportedAssignees.length === 0 || supportedAssignees.includes(DAY_OFF_ALL_ASSIGNEES)) {
+        return [DAY_OFF_ALL_ASSIGNEES];
+    }
+
+    return supportedAssignees;
+}
+
+
+function isDayOffAssigneeOption(assignee) {
+    return assignee !== DAY_OFF_EXCLUDED_ASSIGNEE;
 }
 
 

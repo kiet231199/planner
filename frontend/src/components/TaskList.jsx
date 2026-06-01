@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import FilterListIcon from "@mui/icons-material/FilterList";
@@ -39,6 +39,7 @@ export default function TaskList(props) {
     const {
         panelRef,
         tasks,
+        assignees = [],
         assigneeFilterOptions = [],
         assigneeSortDirection,
         highlightedTaskId,
@@ -59,6 +60,9 @@ export default function TaskList(props) {
     const [filterAnchorElement, setFilterAnchorElement] = useState(null);
     const isFilterMenuOpen = Boolean(filterAnchorElement);
     const isAssigneeFilterActive = selectedAssigneeFilters.length > 0;
+    const assigneeColorMap = useMemo(function memoizeAssigneeColorMap() {
+        return getAssigneeColorMap(assignees);
+    }, [assignees]);
 
     useEffect(function closeFilterMenuAfterCollapse() {
         if (!isCollapsed) {
@@ -253,7 +257,10 @@ export default function TaskList(props) {
                                     title={avatarTitle}
                                     aria-label={avatarTitle}
                                     sx={{
-                                        backgroundColor: getAssigneeAvatarColor(assigneeLabel),
+                                        backgroundColor: getAssigneeAvatarColor(
+                                            assigneeLabel,
+                                            assigneeColorMap,
+                                        ),
                                     }}
                                 >
                                     {avatarInitials}
@@ -370,9 +377,15 @@ function getAssigneeAvatarTitle(assigneeLabel) {
 }
 
 
-function getAssigneeAvatarColor(assigneeLabel) {
+function getAssigneeAvatarColor(assigneeLabel, assigneeColorMap) {
     if (assigneeLabel === UNASSIGNED_ASSIGNEE_LABEL) {
         return UNASSIGNED_AVATAR_COLOR;
+    }
+
+    const configuredColor = assigneeColorMap.get(assigneeLabel);
+
+    if (configuredColor) {
+        return configuredColor;
     }
 
     const colorIndex = getAssigneeColorIndex(assigneeLabel);
@@ -389,4 +402,11 @@ function getAssigneeColorIndex(assigneeLabel) {
     }
 
     return characterTotal % ASSIGNEE_AVATAR_COLORS.length;
+}
+
+
+function getAssigneeColorMap(assignees) {
+    return new Map(assignees.map(function mapAssigneeColor(assignee) {
+        return [assignee.name, assignee.backgroundColor];
+    }));
 }

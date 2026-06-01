@@ -8,6 +8,8 @@
     --planner-text-color: #4c4f69;
     --planner-muted-text-color: #5c5f77;
     --planner-task-selected-outline: #1e66f5;
+    --planner-task-delayed-glow-color: rgba(183, 28, 28, 0.9);
+    --planner-task-delayed-glow-soft-color: rgba(183, 28, 28, 0.56);
     --planner-task-shadow: rgba(76, 79, 105, 0.16);
     --planner-task-hover-shadow: rgba(76, 79, 105, 0.24);
     --planner-row-hover-color: rgba(30, 102, 245, 0.08);
@@ -37,6 +39,8 @@
     --planner-text-color: #cad3f5;
     --planner-muted-text-color: #a5adcb;
     --planner-task-selected-outline: #b7bdf8;
+    --planner-task-delayed-glow-color: rgba(211, 47, 47, 0.92);
+    --planner-task-delayed-glow-soft-color: rgba(211, 47, 47, 0.62);
     --planner-task-shadow: rgba(24, 25, 38, 0.34);
     --planner-task-hover-shadow: rgba(24, 25, 38, 0.48);
     --planner-row-hover-color: rgba(138, 173, 244, 0.14);
@@ -539,6 +543,22 @@ body.task-list-resizing {
         0 2px 8px var(--planner-task-hover-shadow);
 }
 
+.task-bar-delayed {
+    box-shadow:
+        0 0 18px 4px var(--planner-task-delayed-glow-soft-color),
+        0 0 28px 8px rgba(183, 28, 28, 0.26),
+        0 1px 2px var(--planner-task-shadow);
+}
+
+.task-bar-delayed:hover,
+.task-bar-delayed.task-bar-selected {
+    box-shadow:
+        0 0 0 2px var(--planner-task-selected-outline),
+        0 0 20px 5px var(--planner-task-delayed-glow-soft-color),
+        0 0 30px 10px rgba(183, 28, 28, 0.28),
+        0 2px 8px var(--planner-task-hover-shadow);
+}
+
 .task-bar-progress {
     position: absolute;
     top: 0;
@@ -665,12 +685,88 @@ body.task-list-resizing {
     gap: 12px;
 }
 
+.assignee-field-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 40px;
+    align-items: center;
+    gap: 10px;
+}
+
+.assignee-manager-button {
+    width: 40px !important;
+    height: 40px !important;
+    border: 1px solid var(--planner-border-color) !important;
+    border-radius: 6px !important;
+}
+
+.progress-field {
+    padding-top: 18px;
+}
+
+.progress-slider {
+    width: calc(100% - 24px) !important;
+    margin: 0 12px;
+}
+
+.progress-slider .MuiSlider-markLabel {
+    font-size: 0.86rem;
+}
+
+.progress-slider .MuiSlider-markLabel[data-index="0"] {
+    transform: translateX(0);
+}
+
+.progress-slider .MuiSlider-markLabel[data-index="2"] {
+    transform: translateX(-100%);
+}
+
 .task-form-actions,
 .day-off-form-actions {
     display: flex;
     justify-content: flex-end;
     gap: 10px;
     padding-top: 8px;
+}
+
+.planner-action-button {
+    width: 112px;
+    min-width: 112px !important;
+    height: 36px;
+}
+
+.assignee-manager-content {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.assignee-manager-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.assignee-manager-table {
+    table-layout: fixed;
+}
+
+.assignee-selection-cell {
+    width: 52px;
+}
+
+.assignee-color-cell {
+    width: 80px;
+    padding-right: 8px !important;
+    padding-left: 8px !important;
+}
+
+.assignee-color-input {
+    width: 56px;
+}
+
+.assignee-color-input .MuiInputBase-input {
+    padding-right: 8px;
+    padding-left: 8px;
 }
 
 @media (max-width: 860px) {

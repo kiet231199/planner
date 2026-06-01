@@ -6,6 +6,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 MAX_PROGRESS_PERCENT = 100
 MIN_PROGRESS_PERCENT = 0
+HEX_COLOR_PATTERN = r"^#[0-9A-Fa-f]{6}$"
+UNASSIGNED_ASSIGNEE = "Unassigned"
+DAY_OFF_ALL_ASSIGNEES = "All"
+RESERVED_ASSIGNEE_NAMES = {
+    UNASSIGNED_ASSIGNEE.casefold(),
+    DAY_OFF_ALL_ASSIGNEES.casefold(),
+}
 
 
 class TaskCreate(BaseModel):
@@ -48,6 +55,10 @@ class TaskCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_date_range(self) -> "TaskCreate":
+        if self.taskType == "Release":
+            self.stopDate = self.startDate
+            self.progressPercent = MAX_PROGRESS_PERCENT
+
         if self.stopDate < self.startDate:
             raise ValueError("Stop date must be on or after start date.")
 
@@ -154,3 +165,77 @@ class DayOffDateList(BaseModel):
     @classmethod
     def normalize_dates(cls, value: list[date]) -> list[date]:
         return list(dict.fromkeys(value))
+
+
+class Assignee(BaseModel):
+    name: str = Field(min_length=1)
+    backgroundColor: str = Field(pattern=HEX_COLOR_PATTERN)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        assignee_name = normalize_text_value(value)
+
+        if assignee_name.casefold() in RESERVED_ASSIGNEE_NAMES:
+            raise ValueError("Assignee name is reserved.")
+
+        return assignee_name
+
+    @field_validator("backgroundColor")
+    @classmethod
+    def normalize_background_color(cls, value: str) -> str:
+        return value.strip()
+
+
+class AssigneeRename(BaseModel):
+    previousName: str = Field(min_length=1)
+    nextName: str = Field(min_length=1)
+
+    @field_validator("previousName", "nextName")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        return normalize_text_value(value)
+
+
+class AssigneeListUpdate(BaseModel):
+    assignees: list[Assignee]
+    renamedAssignees: list[AssigneeRename] = Field(default_factory=list)
+    deletedAssignees: list[str] = Field(default_factory=list)
+
+    @field_validator("assignees")
+    @classmethod
+    def validate_unique_assignee_names(cls, value: list[Assignee]) -> list[Assignee]:
+        assignee_name_keys = [assignee.name.casefold() for assignee in value]
+
+        if len(set(assignee_name_keys)) != len(assignee_name_keys):
+            raise ValueError("Assignee names must be unique.")
+
+        return value
+
+    @field_validator("deletedAssignees")
+    @classmethod
+    def normalize_deleted_assignees(cls, value: list[str]) -> list[str]:
+        normalized_names = []
+
+        for assignee_name in value:
+            normalized_name = assignee_name.strip()
+
+            if normalized_name:
+                normalized_names.append(normalized_name)
+
+        return list(dict.fromkeys(normalized_names))
+
+
+class PlannerData(BaseModel):
+    tasks: list[Task]
+    dayOffs: list[DayOff]
+    assignees: list[Assignee]
+
+
+def normalize_text_value(value: str) -> str:
+    trimmed_value = value.strip()
+
+    if not trimmed_value:
+        raise ValueError("Field must not be empty.")
+
+    return trimmed_value

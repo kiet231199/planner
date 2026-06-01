@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import CloseIcon from "@mui/icons-material/Close";
 import {
     Box,
@@ -16,14 +16,8 @@ import {
     Typography,
 } from "@mui/material";
 
-import { ASSIGNEE_OPTIONS, DAY_OFF_ALL_ASSIGNEES } from "../constants/taskOptions";
+import { DAY_OFF_ALL_ASSIGNEES } from "../constants/taskOptions";
 
-
-const DAY_OFF_EXCLUDED_ASSIGNEE = "Unassigned";
-const DAY_OFF_ASSIGNEE_OPTIONS = [
-    DAY_OFF_ALL_ASSIGNEES,
-    ...ASSIGNEE_OPTIONS.filter(isDayOffAssigneeOption),
-];
 
 const DEFAULT_FORM_VALUES = {
     name: "",
@@ -39,21 +33,25 @@ export default function DayOffDrawer(props) {
         mode = "create",
         initialValues = DEFAULT_FORM_VALUES,
         selectedDates = [],
+        assignees = [],
         onClose,
         onCreateDayOffs,
     } = props;
     const [formValues, setFormValues] = useState(DEFAULT_FORM_VALUES);
     const [formErrors, setFormErrors] = useState({});
     const isEditMode = mode === "edit";
+    const dayOffAssigneeOptions = useMemo(function memoizeDayOffAssigneeOptions() {
+        return getDayOffAssigneeOptions(assignees);
+    }, [assignees]);
 
     useEffect(function syncFormValuesWhenOpened() {
         if (!open) {
             return;
         }
 
-        setFormValues(getInitialFormValues(initialValues));
+        setFormValues(getInitialFormValues(initialValues, dayOffAssigneeOptions));
         setFormErrors({});
-    }, [open, initialValues]);
+    }, [open, initialValues, dayOffAssigneeOptions]);
 
     async function handleSubmit(event) {
         event.preventDefault();
@@ -108,7 +106,7 @@ export default function DayOffDrawer(props) {
     }
 
     function resetForm() {
-        setFormValues(getInitialFormValues(initialValues));
+        setFormValues(getInitialFormValues(initialValues, dayOffAssigneeOptions));
         setFormErrors({});
     }
 
@@ -163,7 +161,7 @@ export default function DayOffDrawer(props) {
                         renderValue={renderAssigneeValue}
                         onChange={handleAssigneesChange}
                     >
-                        {DAY_OFF_ASSIGNEE_OPTIONS.map(function renderAssignee(option) {
+                        {dayOffAssigneeOptions.map(function renderAssignee(option) {
                             return (
                                 <MenuItem key={option} value={option}>
                                     <Checkbox checked={formValues.assignees.includes(option)} />
@@ -177,10 +175,16 @@ export default function DayOffDrawer(props) {
                     )}
                 </FormControl>
                 <Box className="day-off-form-actions">
-                    <Button variant="text" disabled={isSaving} onClick={handleCancel}>
+                    <Button
+                        className="planner-action-button"
+                        variant="outlined"
+                        disabled={isSaving}
+                        onClick={handleCancel}
+                    >
                         Cancel
                     </Button>
                     <Button
+                        className="planner-action-button"
                         variant="contained"
                         type="submit"
                         disabled={isSaving || selectedDates.length === 0}
@@ -209,22 +213,25 @@ function validateForm(formValues) {
 }
 
 
-function getInitialFormValues(initialValues) {
+function getInitialFormValues(initialValues, dayOffAssigneeOptions) {
     return {
         name: initialValues.name || "",
         description: initialValues.description || "",
-        assignees: getSupportedDayOffAssignees(initialValues.assignees),
+        assignees: getSupportedDayOffAssignees(
+            initialValues.assignees,
+            dayOffAssigneeOptions,
+        ),
     };
 }
 
 
-function getSupportedDayOffAssignees(assignees) {
+function getSupportedDayOffAssignees(assignees, dayOffAssigneeOptions) {
     if (!assignees || assignees.length === 0) {
         return [DAY_OFF_ALL_ASSIGNEES];
     }
 
     const supportedAssignees = assignees.filter(function keepSupportedAssignee(assignee) {
-        return DAY_OFF_ASSIGNEE_OPTIONS.includes(assignee);
+        return dayOffAssigneeOptions.includes(assignee);
     });
 
     if (supportedAssignees.length === 0 || supportedAssignees.includes(DAY_OFF_ALL_ASSIGNEES)) {
@@ -235,8 +242,15 @@ function getSupportedDayOffAssignees(assignees) {
 }
 
 
-function isDayOffAssigneeOption(assignee) {
-    return assignee !== DAY_OFF_EXCLUDED_ASSIGNEE;
+function getDayOffAssigneeOptions(assignees) {
+    const assigneeNames = assignees.map(function mapAssigneeName(assignee) {
+        return assignee.name;
+    });
+
+    return [
+        DAY_OFF_ALL_ASSIGNEES,
+        ...assigneeNames,
+    ];
 }
 
 

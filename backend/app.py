@@ -4,10 +4,13 @@ from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import (
+    Assignee,
+    AssigneeListUpdate,
     DayOff,
     DayOffBulkCreate,
     DayOffDateList,
     DayOffListUpdate,
+    PlannerData,
     Task,
     TaskCreate,
     TaskListUpdate,
@@ -17,8 +20,10 @@ from storage import (
     create_task,
     delete_day_offs,
     delete_task,
+    list_assignees,
     list_day_offs,
     list_tasks,
+    replace_assignees,
     replace_day_offs,
     replace_tasks,
     update_task,
@@ -77,6 +82,11 @@ def get_day_offs() -> list[DayOff]:
     return list_day_offs()
 
 
+@app.get("/api/assignees", response_model=list[Assignee])
+def get_assignees() -> list[Assignee]:
+    return list_assignees()
+
+
 @app.post("/api/tasks", response_model=Task, status_code=status.HTTP_201_CREATED)
 def post_task(task_create: TaskCreate, after_task_id: str | None = None) -> Task:
     return create_task(task_create, after_task_id)
@@ -95,6 +105,11 @@ def put_tasks_bulk(task_list_update: TaskListUpdate) -> list[Task]:
 @app.put("/api/day-offs/bulk", response_model=list[DayOff])
 def put_day_offs_bulk(day_off_list_update: DayOffListUpdate) -> list[DayOff]:
     return replace_day_offs(day_off_list_update.dayOffs)
+
+
+@app.put("/api/assignees", response_model=PlannerData)
+def put_assignees(assignee_list_update: AssigneeListUpdate) -> PlannerData:
+    return replace_assignees(assignee_list_update)
 
 
 @app.post("/api/tasks/bulk/sync", response_model=list[Task])

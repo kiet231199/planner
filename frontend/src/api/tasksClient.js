@@ -11,6 +11,11 @@ export async function listDayOffs() {
 }
 
 
+export async function listAssignees() {
+    return sendJsonRequest("/api/assignees");
+}
+
+
 export async function createTask(task) {
     return sendJsonRequest("/api/tasks", {
         method: "POST",
@@ -57,6 +62,14 @@ export async function replaceDayOffs(dayOffs) {
     return sendJsonRequest("/api/day-offs/bulk", {
         method: "PUT",
         body: JSON.stringify({ dayOffs }),
+    });
+}
+
+
+export async function replaceAssignees(assigneeUpdate) {
+    return sendJsonRequest("/api/assignees", {
+        method: "PUT",
+        body: JSON.stringify(assigneeUpdate),
     });
 }
 

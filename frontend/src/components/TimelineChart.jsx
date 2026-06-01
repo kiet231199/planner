@@ -8,7 +8,11 @@ import {
     getTimelineMetrics,
     getTimelineOffsetForDate,
 } from "../utils/chartScale";
-import { DAY_OFF_ALL_ASSIGNEES } from "../constants/taskOptions";
+import {
+    DAY_OFF_ALL_ASSIGNEES,
+    DEFAULT_TASK_TYPE_COLOR,
+    TASK_TYPE_COLORS,
+} from "../constants/taskOptions";
 
 
 const DRAG_MOUSE_BUTTON = 0;
@@ -34,6 +38,10 @@ const TASK_BAR_HORIZONTAL_INSET_PIXELS = 4;
 const TASK_BAR_VERTICAL_INSET_PIXELS = 6;
 const MIN_TASK_BAR_DISPLAY_WIDTH_PIXELS = 20;
 const MIN_TASK_BAR_RESIZE_WIDTH_PIXELS = 36;
+const COMPLETED_PROGRESS_PERCENT = 100;
+const PERCENT_DIVISOR = 100;
+const MINIMUM_TASK_DURATION_DAYS = 1;
+const NO_ELAPSED_TASK_DAYS = 0;
 
 
 export default function TimelineChart(props) {
@@ -669,6 +677,7 @@ export default function TimelineChart(props) {
                 >
                     {metrics.bars.map(function renderTaskBar(bar) {
                         const isSelected = selectedTaskIds.includes(bar.task.id);
+                        const isDelayed = isTaskDelayed(bar.task, metrics.todayDate);
                         const taskBarLayout = getTaskBarLayout(bar, taskDragPreview);
                         const taskBarVisualLayout = getTaskBarVisualLayout(taskBarLayout);
                         const canResizeTask = (
@@ -681,7 +690,7 @@ export default function TimelineChart(props) {
                                 key={bar.task.id}
                                 role="button"
                                 tabIndex={0}
-                                className={isSelected ? "task-bar task-bar-selected" : "task-bar"}
+                                className={getTaskBarClassName(isSelected, isDelayed)}
                                 sx={{
                                     left: `${taskBarVisualLayout.left}px`,
                                     top: `${taskBarVisualLayout.top}px`,
@@ -836,6 +845,21 @@ function getTimelineHeaderCellClassName(isSelectableDayCell, isSelectedDayCell) 
 
     if (isSelectedDayCell) {
         classNames.push("timeline-header-day-cell-selected");
+    }
+
+    return classNames.join(" ");
+}
+
+
+function getTaskBarClassName(isSelected, isDelayed) {
+    const classNames = ["task-bar"];
+
+    if (isSelected) {
+        classNames.push("task-bar-selected");
+    }
+
+    if (isDelayed) {
+        classNames.push("task-bar-delayed");
     }
 
     return classNames.join(" ");
@@ -1051,6 +1075,52 @@ function formatDateString(date) {
     const day = String(date.getDate()).padStart(2, "0");
 
     return `${year}-${month}-${day}`;
+}
+
+
+function isTaskDelayed(task, todayDate) {
+    const progressPercent = Number(task.progressPercent) || 0;
+
+    if (progressPercent >= COMPLETED_PROGRESS_PERCENT) {
+        return false;
+    }
+
+    if (!task.startDate || !task.stopDate || !isValidDate(todayDate)) {
+        return false;
+    }
+
+    const startDate = parseDateString(task.startDate);
+    const stopDate = parseDateString(task.stopDate);
+
+    if (!isValidTaskDateRange(startDate, stopDate)) {
+        return false;
+    }
+
+    const durationDays = getDateDeltaDays(startDate, stopDate) + 1;
+    const elapsedDays = getDateDeltaDays(startDate, todayDate) + 1;
+
+    if (
+        durationDays < MINIMUM_TASK_DURATION_DAYS
+        || elapsedDays <= NO_ELAPSED_TASK_DAYS
+    ) {
+        return false;
+    }
+
+    const expectedProgressDays = durationDays * (progressPercent / PERCENT_DIVISOR);
+
+    return elapsedDays > expectedProgressDays;
+}
+
+
+function isValidTaskDateRange(startDate, stopDate) {
+    return isValidDate(startDate)
+        && isValidDate(stopDate)
+        && stopDate >= startDate;
+}
+
+
+function isValidDate(date) {
+    return date instanceof Date && !Number.isNaN(date.getTime());
 }
 
 
@@ -1277,13 +1347,5 @@ function scrollTimelineHorizontally(panel, deltaX) {
 
 
 function getColorFromTaskType(taskType) {
-    const colors = {
-        Planning: "#00a896",
-        Design: "#7c4dff",
-        Development: "#1976d2",
-        Testing: "#ef6c00",
-        Release: "#c2185b",
-    };
-
-    return colors[taskType] || "#1976d2";
+    return TASK_TYPE_COLORS[taskType] || DEFAULT_TASK_TYPE_COLOR;
 }

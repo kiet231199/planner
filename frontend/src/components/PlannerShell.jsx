@@ -34,6 +34,7 @@ export default function PlannerShell(props) {
     const {
         tasks,
         dayOffs,
+        assignees,
         selectedTaskId,
         selectedTaskIds,
         selectedDayOffDates,
@@ -43,6 +44,7 @@ export default function PlannerShell(props) {
         isSettingsDrawerOpen,
         isLoading,
         isSaving,
+        isAssigneeSaving,
         canRedo,
         canUndo,
         canEditSelectedTask,
@@ -55,6 +57,7 @@ export default function PlannerShell(props) {
         onCreateDayOffs,
         onDayOffActionClick,
         onDayOffDrawerClose,
+        onSaveAssignees,
         onColorModeToggle,
         onClearSelection,
         onCreateTask,
@@ -300,6 +303,7 @@ export default function PlannerShell(props) {
                 <TaskList
                     panelRef={taskListPanelRef}
                     tasks={displayedTasks}
+                    assignees={assignees}
                     assigneeFilterOptions={assigneeFilterOptions}
                     assigneeSortDirection={assigneeSortDirection}
                     highlightedTaskId={taskListHighlightedTaskId}
@@ -353,10 +357,13 @@ export default function PlannerShell(props) {
             <TaskDrawer
                 open={isDrawerOpen}
                 isSaving={isSaving}
+                assignees={assignees}
+                isAssigneeSaving={isAssigneeSaving}
                 mode={drawerMode}
                 task={selectedTask}
                 onClose={onDrawerClose}
                 onCreateTask={onCreateTask}
+                onSaveAssignees={onSaveAssignees}
                 onUpdateTask={onUpdateTask}
             />
             <SettingsDrawer
@@ -371,6 +378,7 @@ export default function PlannerShell(props) {
                 mode={dayOffDrawerMode}
                 initialValues={dayOffInitialValues}
                 selectedDates={selectedDayOffDates}
+                assignees={assignees}
                 onClose={onDayOffDrawerClose}
                 onCreateDayOffs={onCreateDayOffs}
             />

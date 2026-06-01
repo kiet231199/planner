@@ -4,8 +4,10 @@ import { Alert, Box, CssBaseline, Snackbar, ThemeProvider, createTheme } from "@
 import {
     createDayOffs,
     deleteDayOffs,
+    listAssignees,
     listDayOffs,
     listTasks,
+    replaceAssignees,
     replaceDayOffs,
     replaceTasks,
     replaceTasksBeforeUnload,
@@ -82,6 +84,7 @@ export default function App() {
     const [colorMode, setColorMode] = useState(getInitialColorMode);
     const [tasks, setTasks] = useState([]);
     const [dayOffs, setDayOffs] = useState([]);
+    const [assignees, setAssignees] = useState([]);
     const [selectedTaskIds, setSelectedTaskIds] = useState([]);
     const [selectedDayOffDates, setSelectedDayOffDates] = useState([]);
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -91,7 +94,8 @@ export default function App() {
     const [dayOffDrawerMode, setDayOffDrawerMode] = useState("create");
     const [isLoading, setIsLoading] = useState(true);
     const [isDayOffSaving, setIsDayOffSaving] = useState(false);
-    const isSaving = isDayOffSaving;
+    const [isAssigneeSaving, setIsAssigneeSaving] = useState(false);
+    const isSaving = isDayOffSaving || isAssigneeSaving;
     const [errorMessage, setErrorMessage] = useState("");
     const [historyState, setHistoryState] = useState({
         canUndo: false,
@@ -100,6 +104,7 @@ export default function App() {
     const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
     const tasksRef = useRef([]);
     const dayOffsRef = useRef([]);
+    const assigneesRef = useRef([]);
     const selectedTaskIdsRef = useRef([]);
     const selectedDayOffDatesRef = useRef([]);
     const lastSelectedTaskIdRef = useRef(null);
@@ -132,6 +137,10 @@ export default function App() {
     useEffect(function keepLatestDayOffsReference() {
         dayOffsRef.current = dayOffs;
     }, [dayOffs]);
+
+    useEffect(function keepLatestAssigneesReference() {
+        assigneesRef.current = assignees;
+    }, [assignees]);
 
     useEffect(function keepLatestSelectionReference() {
         selectedTaskIdsRef.current = selectedTaskIds;
@@ -204,9 +213,10 @@ export default function App() {
         setIsLoading(true);
 
         try {
-            const [tasksResult, dayOffsResult] = await Promise.allSettled([
+            const [tasksResult, dayOffsResult, assigneesResult] = await Promise.allSettled([
                 listTasks(),
                 listDayOffs(),
+                listAssignees(),
             ]);
 
             if (tasksResult.status === "rejected") {
@@ -224,12 +234,22 @@ export default function App() {
 
                 dayOffsRef.current = loadedDayOffs;
                 setDayOffs(loadedDayOffs);
-                return;
+            } else {
+                dayOffsRef.current = [];
+                setDayOffs([]);
+                setErrorMessage(getDayOffLoadErrorMessage(dayOffsResult.reason));
             }
 
-            dayOffsRef.current = [];
-            setDayOffs([]);
-            setErrorMessage(getDayOffLoadErrorMessage(dayOffsResult.reason));
+            if (assigneesResult.status === "fulfilled") {
+                const loadedAssignees = assigneesResult.value;
+
+                assigneesRef.current = loadedAssignees;
+                setAssignees(loadedAssignees);
+            } else {
+                assigneesRef.current = [];
+                setAssignees([]);
+                setErrorMessage(getAssigneeLoadErrorMessage(assigneesResult.reason));
+            }
         } catch (error) {
             setErrorMessage(error.message);
         } finally {
@@ -454,6 +474,32 @@ export default function App() {
         }
     }
 
+    async function handleSaveAssignees(assigneeUpdate) {
+        if (isDirtyRef.current) {
+            await flushTasksToBackend();
+        }
+
+        if (isDirtyRef.current) {
+            return null;
+        }
+
+        setIsAssigneeSaving(true);
+
+        try {
+            const updatedPlannerData = await replaceAssignees(assigneeUpdate);
+
+            applyPlannerData(updatedPlannerData);
+
+            return updatedPlannerData;
+        } catch (error) {
+            setErrorMessage(error.message);
+
+            return null;
+        } finally {
+            setIsAssigneeSaving(false);
+        }
+    }
+
     function handleSelectDayOffDate(date, selectionMode) {
         setSelectedDayOffDates(function updateSelectedDayOffDates(currentDates) {
             const nextDates = getNextSelectedDayOffDates(
@@ -641,6 +687,25 @@ export default function App() {
         setSelectedDayOffDates(clonedSelectedDayOffDates);
     }
 
+    function applyPlannerData(plannerData) {
+        const nextTasks = cloneTasks(plannerData.tasks);
+        const nextDayOffs = cloneDayOffs(plannerData.dayOffs);
+        const nextAssignees = cloneAssignees(plannerData.assignees);
+
+        tasksRef.current = nextTasks;
+        dayOffsRef.current = nextDayOffs;
+        assigneesRef.current = nextAssignees;
+        undoStackRef.current = [];
+        redoStackRef.current = [];
+        isDirtyRef.current = false;
+        pendingActionCountRef.current = 0;
+        setTasks(nextTasks);
+        setDayOffs(nextDayOffs);
+        setAssignees(nextAssignees);
+        clearMissingSelection(nextTasks);
+        refreshHistoryState();
+    }
+
     function markTasksDirty() {
         isDirtyRef.current = true;
         pendingActionCountRef.current += 1;
@@ -793,6 +858,7 @@ export default function App() {
                 <PlannerShell
                     tasks={tasks}
                     dayOffs={dayOffs}
+                    assignees={assignees}
                     selectedTaskId={selectedTaskId}
                     selectedTaskIds={selectedTaskIds}
                     selectedDayOffDates={selectedDayOffDates}
@@ -801,6 +867,7 @@ export default function App() {
                     isSettingsDrawerOpen={isSettingsDrawerOpen}
                     isLoading={isLoading}
                     isSaving={isSaving}
+                    isAssigneeSaving={isAssigneeSaving}
                     canRedo={historyState.canRedo}
                     canUndo={historyState.canUndo}
                     drawerMode={drawerMode}
@@ -813,6 +880,7 @@ export default function App() {
                     onCreateDayOffs={handleCreateDayOffs}
                     onDayOffActionClick={handleDayOffActionClick}
                     onDayOffDrawerClose={handleDayOffDrawerClose}
+                    onSaveAssignees={handleSaveAssignees}
                     onDrawerClose={function closeDrawer() {
                         setIsDrawerOpen(false);
                     }}
@@ -1067,6 +1135,15 @@ function cloneDayOffs(dayOffs) {
         return {
             ...dayOff,
             assignees: [...dayOff.assignees],
+        };
+    });
+}
+
+
+function cloneAssignees(assignees) {
+    return assignees.map(function cloneAssignee(assignee) {
+        return {
+            ...assignee,
         };
     });
 }
@@ -1571,4 +1648,13 @@ function getDayOffLoadErrorMessage(error) {
     }
 
     return "Day-offs could not be loaded.";
+}
+
+
+function getAssigneeLoadErrorMessage(error) {
+    if (error && error.message) {
+        return `Assignees could not be loaded. ${error.message}`;
+    }
+
+    return "Assignees could not be loaded.";
 }

@@ -8,10 +8,13 @@ export default function TaskDrawer(props) {
     const {
         open,
         isSaving,
+        assignees,
+        isAssigneeSaving,
         mode,
         task,
         onClose,
         onCreateTask,
+        onSaveAssignees,
         onUpdateTask,
     } = props;
 
@@ -41,7 +44,10 @@ export default function TaskDrawer(props) {
                 key={isEditMode && task ? task.id : "create"}
                 initialTask={isEditMode ? task : null}
                 isSaving={isSaving}
+                assignees={assignees}
+                isAssigneeSaving={isAssigneeSaving}
                 onCancel={onClose}
+                onSaveAssignees={onSaveAssignees}
                 onSubmitTask={isEditMode ? onUpdateTask : onCreateTask}
             />
         </Drawer>

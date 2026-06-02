@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import KeyboardTabIcon from "@mui/icons-material/KeyboardTab";
-import { Box, IconButton, LinearProgress, Tooltip } from "@mui/material";
+import { Box, LinearProgress } from "@mui/material";
 
 import DayOffDrawer from "./DayOffDrawer";
 import SettingsDrawer from "./SettingsDrawer";
@@ -12,7 +11,6 @@ import { getTimelineHeaderHeight, getTimelineMetrics } from "../utils/chartScale
 
 
 const TASK_LIST_WIDTH_STORAGE_KEY = "planner-task-list-width";
-const TASK_LIST_COLLAPSED_STORAGE_KEY = "planner-task-list-collapsed";
 const DEFAULT_TASK_LIST_WIDTH_PIXELS = 280;
 const MIN_TASK_LIST_WIDTH_PIXELS = 260;
 const MAX_TASK_LIST_WIDTH_PIXELS = 560;
@@ -48,6 +46,8 @@ export default function PlannerShell(props) {
         canRedo,
         canUndo,
         canEditSelectedTask,
+        canCopySelectedTasks,
+        canPasteCopiedTasks,
         drawerMode,
         dayOffDrawerMode,
         dayOffInitialValues,
@@ -61,12 +61,15 @@ export default function PlannerShell(props) {
         onColorModeToggle,
         onClearSelection,
         onCreateTask,
+        onCopySelectedTasks,
         onDeleteSelectedTask,
         onDrawerClose,
         onEditSelectedTask,
         onMoveTasks,
         onOpenDayOffEdit,
         onOpenTaskEdit,
+        onPasteCopiedTasks,
+        onRefreshPlanner,
         onRedoTaskChange,
         onResizeTaskDates,
         onSelectTask,
@@ -80,9 +83,7 @@ export default function PlannerShell(props) {
     } = props;
 
     const [taskListWidth, setTaskListWidth] = useState(getInitialTaskListWidth);
-    const [isTaskListCollapsed, setIsTaskListCollapsed] = useState(
-        getInitialTaskListCollapsed,
-    );
+    const [isTaskListCollapsed, setIsTaskListCollapsed] = useState(false);
     const [selectedAssigneeFilters, setSelectedAssigneeFilters] = useState([]);
     const [assigneeSortDirection, setAssigneeSortDirection] = useState(ASSIGNEE_SORT_NONE);
     const [highlightedTaskId, setHighlightedTaskId] = useState(null);
@@ -102,7 +103,6 @@ export default function PlannerShell(props) {
         || assigneeSortDirection !== ASSIGNEE_SORT_NONE
     );
     const taskListColumnWidth = getTaskListColumnWidth(taskListWidth, isTaskListCollapsed);
-    const taskListCollapseButtonLabel = getTaskListCollapseButtonLabel(isTaskListCollapsed);
 
     useEffect(function bindTaskListResizeListeners() {
         function handleMouseMove(event) {
@@ -203,7 +203,6 @@ export default function PlannerShell(props) {
         const nextIsTaskListCollapsed = !isTaskListCollapsed;
 
         setIsTaskListCollapsed(nextIsTaskListCollapsed);
-        saveTaskListCollapsed(nextIsTaskListCollapsed);
 
         if (nextIsTaskListCollapsed) {
             taskListResizeStateRef.current = null;
@@ -275,19 +274,26 @@ export default function PlannerShell(props) {
             <TaskToolbar
                 hasSelectedTask={Boolean(selectedTaskId)}
                 hasSelectedDayOffDates={selectedDayOffDates.length > 0}
+                isTaskListCollapsed={isTaskListCollapsed}
                 canEditSelectedTask={canEditSelectedTask}
+                canCopySelectedTasks={canCopySelectedTasks}
+                canPasteCopiedTasks={canPasteCopiedTasks}
                 canRedo={canRedo}
                 canUndo={canUndo}
                 isSaving={isSaving}
                 onAddTaskClick={onAddTaskClick}
+                onCopySelectedTasks={onCopySelectedTasks}
                 onDayOffActionClick={onDayOffActionClick}
                 onDeleteSelectedTask={onDeleteSelectedTask}
                 onEditSelectedTask={onEditSelectedTask}
+                onPasteCopiedTasks={onPasteCopiedTasks}
+                onRefreshPlanner={onRefreshPlanner}
                 onRedoTaskChange={onRedoTaskChange}
                 onSettingsClick={onSettingsClick}
                 onScrollTimelineFuture={handleScrollTimelineFuture}
                 onScrollTimelinePast={handleScrollTimelinePast}
                 onScrollTimelineToday={handleScrollTimelineToday}
+                onTaskListCollapseToggle={handleTaskListCollapseToggle}
                 onUndoTaskChange={onUndoTaskChange}
                 selectedDatesHaveDayOff={selectedDatesHaveDayOff}
             />
@@ -321,16 +327,6 @@ export default function PlannerShell(props) {
                     onResizeStart={handleTaskListResizeStart}
                     onSelectTask={onSelectTask}
                 />
-                <Tooltip title={taskListCollapseButtonLabel}>
-                    <IconButton
-                        className="task-list-collapse-button"
-                        aria-label={taskListCollapseButtonLabel}
-                        size="small"
-                        onClick={handleTaskListCollapseToggle}
-                    >
-                        {getTaskListCollapseIcon(isTaskListCollapsed)}
-                    </IconButton>
-                </Tooltip>
                 <TimelineChart
                     panelRef={timelinePanelRef}
                     tasks={displayedTasks}
@@ -428,24 +424,6 @@ function getPlannerContentClassName(isTaskListCollapsed) {
 }
 
 
-function getTaskListCollapseButtonLabel(isTaskListCollapsed) {
-    if (isTaskListCollapsed) {
-        return "Expand task list";
-    }
-
-    return "Collapse task list";
-}
-
-
-function getTaskListCollapseIcon(isTaskListCollapsed) {
-    if (isTaskListCollapsed) {
-        return <KeyboardTabIcon fontSize="small" />;
-    }
-
-    return <KeyboardTabIcon className="task-list-collapse-icon-left" fontSize="small" />;
-}
-
-
 function getAssigneeFilterOptions(tasks) {
     const assigneeLabels = tasks.map(function mapTaskAssignee(task) {
         return getAssigneeLabel(task);
@@ -538,48 +516,6 @@ function getAssigneeLabel(task) {
     }
 
     return trimmedAssigneeLabel;
-}
-
-
-function getInitialTaskListCollapsed() {
-    const storedTaskListCollapsed = readStoredTaskListCollapsed();
-
-    if (storedTaskListCollapsed !== null) {
-        return storedTaskListCollapsed;
-    }
-
-    return false;
-}
-
-
-function readStoredTaskListCollapsed() {
-    try {
-        const storedValue = window.localStorage.getItem(TASK_LIST_COLLAPSED_STORAGE_KEY);
-
-        if (storedValue === "true") {
-            return true;
-        }
-
-        if (storedValue === "false") {
-            return false;
-        }
-    } catch {
-        return null;
-    }
-
-    return null;
-}
-
-
-function saveTaskListCollapsed(isTaskListCollapsed) {
-    try {
-        window.localStorage.setItem(
-            TASK_LIST_COLLAPSED_STORAGE_KEY,
-            String(isTaskListCollapsed),
-        );
-    } catch {
-        return;
-    }
 }
 
 

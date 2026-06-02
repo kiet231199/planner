@@ -5,6 +5,7 @@
     --planner-border-color: #bcc0cc;
     --planner-grid-border-color: #ccd0da;
     --planner-row-border-color: #dce0e8;
+    --planner-toolbar-panel-color: #e6e9ef;
     --planner-text-color: #4c4f69;
     --planner-muted-text-color: #5c5f77;
     --planner-task-selected-outline: #1e66f5;
@@ -36,6 +37,7 @@
     --planner-border-color: #494d64;
     --planner-grid-border-color: #363a4f;
     --planner-row-border-color: rgba(91, 96, 120, 0.48);
+    --planner-toolbar-panel-color: #1e2030;
     --planner-text-color: #cad3f5;
     --planner-muted-text-color: #a5adcb;
     --planner-task-selected-outline: #b7bdf8;
@@ -87,20 +89,65 @@ body.task-list-resizing {
     --planner-collapse-button-size: 36px;
     --planner-collapse-button-gap: 8px;
     --planner-scrollbar-reserved-size: 16px;
+    --planner-toolbar-panel-width: 56px;
     --planner-task-text-size: 0.86rem;
     --planner-task-row-height: 38px;
     --planner-timeline-header-row-height: 38px;
 
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: var(--planner-toolbar-panel-width) minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
     width: 100%;
     height: 100vh;
     background: var(--planner-app-background);
 }
 
+.toolbar-panel {
+    position: relative;
+    z-index: 20;
+    grid-row: 1 / 4;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: var(--planner-toolbar-panel-width);
+    height: 100vh;
+    padding: 10px 6px;
+    border-right: 1px solid var(--planner-border-color);
+    background: var(--planner-toolbar-panel-color);
+    box-shadow: 10px 0 14px -10px var(--planner-sticky-column-shadow-color);
+}
+
+.toolbar-panel-button-wrapper {
+    display: inline-flex;
+}
+
+.toolbar-panel-main-actions,
+.toolbar-panel-bottom-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.toolbar-panel-bottom-actions {
+    margin-top: auto;
+}
+
+.toolbar-panel-button {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px !important;
+}
+
+.toolbar-panel-tooltip {
+    font-size: 0.82rem !important;
+}
+
 .task-toolbar {
+    grid-column: 2;
+    grid-row: 1;
     display: grid;
-    grid-template-columns: minmax(180px, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 16px;
     min-height: 64px;
@@ -109,18 +156,13 @@ body.task-list-resizing {
     background: var(--planner-surface-color);
 }
 
-.toolbar-title-group,
-.toolbar-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
 .toolbar-timeline-navigation {
     display: flex;
     align-items: center;
     gap: 6px;
     min-width: 0;
+    grid-column: 2;
+    justify-self: end;
 }
 
 .toolbar-timeline-icon-button {
@@ -128,25 +170,36 @@ body.task-list-resizing {
     height: 36px;
 }
 
-.toolbar-day-off-button {
-    height: 36px;
-    white-space: nowrap;
+.toolbar-title-heading {
+    grid-column: 1;
+    justify-self: start;
+    margin: 0;
 }
 
-.toolbar-title {
+.toolbar-title-button {
+    min-width: 0 !important;
+    padding-right: 0 !important;
+    padding-left: 0 !important;
+    font-size: 1.25rem !important;
+    font-weight: 700 !important;
+    line-height: 1.6 !important;
+    color: var(--planner-text-color) !important;
+    text-transform: none !important;
     white-space: nowrap;
 }
 
 .planner-progress {
-    flex: 0 0 auto;
+    grid-column: 2;
+    grid-row: 2;
 }
 
 .planner-content {
+    grid-column: 2;
+    grid-row: 3;
     position: relative;
     display: grid;
     grid-template-columns: 280px minmax(0, 1fr);
     min-height: 0;
-    flex: 1;
 }
 
 .task-list-panel {
@@ -303,26 +356,6 @@ body.task-list-resizing {
 
 .task-list-resize-handle:hover {
     background: var(--planner-row-border-color);
-}
-
-.task-list-collapse-button {
-    position: absolute !important;
-    bottom: calc(var(--planner-scrollbar-reserved-size) + var(--planner-collapse-button-gap));
-    left: var(--planner-task-list-boundary);
-    z-index: 12;
-    width: var(--planner-collapse-button-size) !important;
-    height: var(--planner-collapse-button-size) !important;
-    border: 1px solid var(--planner-task-selected-outline) !important;
-    border-radius: 6px !important;
-    background: var(--planner-surface-color) !important;
-    box-shadow: 0 4px 14px var(--planner-sticky-column-shadow-color);
-    color: var(--planner-task-selected-outline) !important;
-    transform: translateX(var(--planner-collapse-button-gap));
-}
-
-.task-list-collapse-button:hover {
-    background: var(--planner-row-hover-color) !important;
-    color: var(--planner-task-selected-outline) !important;
 }
 
 .task-list-collapse-icon-left {
@@ -779,11 +812,6 @@ body.task-list-resizing {
     }
 
     .task-toolbar {
-        grid-template-columns: 1fr;
-        align-items: flex-start;
-    }
-
-    .toolbar-actions {
-        flex-wrap: wrap;
+        grid-template-columns: minmax(0, 1fr) auto;
     }
 }

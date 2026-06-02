@@ -87,6 +87,7 @@ export default function App() {
     const [assignees, setAssignees] = useState([]);
     const [selectedTaskIds, setSelectedTaskIds] = useState([]);
     const [selectedDayOffDates, setSelectedDayOffDates] = useState([]);
+    const [copiedTasks, setCopiedTasks] = useState([]);
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
     const [isDayOffDrawerOpen, setIsDayOffDrawerOpen] = useState(false);
     const [isSettingsDrawerOpen, setIsSettingsDrawerOpen] = useState(false);
@@ -107,6 +108,7 @@ export default function App() {
     const assigneesRef = useRef([]);
     const selectedTaskIdsRef = useRef([]);
     const selectedDayOffDatesRef = useRef([]);
+    const copiedTasksRef = useRef([]);
     const lastSelectedTaskIdRef = useRef(null);
     const lastSelectedDayOffDateRef = useRef(null);
     const undoStackRef = useRef([]);
@@ -150,21 +152,45 @@ export default function App() {
         selectedDayOffDatesRef.current = selectedDayOffDates;
     }, [selectedDayOffDates]);
 
+    useEffect(function keepLatestCopiedTasksReference() {
+        copiedTasksRef.current = copiedTasks;
+    }, [copiedTasks]);
+
     useEffect(function bindTaskKeyboardShortcuts() {
         function handleGlobalKeyDown(event) {
-            if (shouldUndoTasks(event, isDrawerOpen)) {
+            const isAnyDrawerOpen = (
+                isDrawerOpen
+                || isDayOffDrawerOpen
+                || isSettingsDrawerOpen
+            );
+            const currentSelectedTaskIds = selectedTaskIdsRef.current;
+            const currentCopiedTasks = copiedTasksRef.current;
+
+            if (shouldUndoTasks(event, isAnyDrawerOpen)) {
                 event.preventDefault();
                 void handleUndoTaskChange();
                 return;
             }
 
-            if (shouldRedoTasks(event, isDrawerOpen)) {
+            if (shouldRedoTasks(event, isAnyDrawerOpen)) {
                 event.preventDefault();
                 void handleRedoTaskChange();
                 return;
             }
 
-            if (!shouldDeleteSelectedTasks(event, isDrawerOpen, selectedTaskIds)) {
+            if (shouldCopySelectedTasks(event, isAnyDrawerOpen, currentSelectedTaskIds)) {
+                event.preventDefault();
+                handleCopySelectedTasks();
+                return;
+            }
+
+            if (shouldPasteCopiedTasks(event, isAnyDrawerOpen, currentCopiedTasks)) {
+                event.preventDefault();
+                handlePasteCopiedTasks();
+                return;
+            }
+
+            if (!shouldDeleteSelectedTasks(event, isAnyDrawerOpen, currentSelectedTaskIds)) {
                 return;
             }
 
@@ -177,7 +203,11 @@ export default function App() {
         return function removeTaskKeyboardShortcuts() {
             window.removeEventListener("keydown", handleGlobalKeyDown);
         };
-    }, [isDrawerOpen, selectedTaskIds]);
+    }, [
+        isDayOffDrawerOpen,
+        isDrawerOpen,
+        isSettingsDrawerOpen,
+    ]);
 
     useEffect(function scheduleDirtyTaskSync() {
         const intervalId = window.setInterval(function syncDirtyTasks() {
@@ -396,6 +426,47 @@ export default function App() {
             beforeSelectedTaskIds,
             [],
             "Delete task",
+        );
+    }
+
+    function handleCopySelectedTasks() {
+        const beforeTasks = tasksRef.current;
+        const beforeSelectedTaskIds = selectedTaskIdsRef.current;
+
+        if (beforeSelectedTaskIds.length === 0) {
+            return;
+        }
+
+        const selectedTasks = getTasksByIdsInTaskOrder(beforeTasks, beforeSelectedTaskIds);
+
+        if (selectedTasks.length === 0) {
+            return;
+        }
+
+        const copiedTaskSnapshots = cloneTasks(selectedTasks);
+
+        copiedTasksRef.current = copiedTaskSnapshots;
+        setCopiedTasks(copiedTaskSnapshots);
+    }
+
+    function handlePasteCopiedTasks() {
+        const beforeTasks = tasksRef.current;
+        const beforeSelectedTaskIds = selectedTaskIdsRef.current;
+        const pastedTasks = cloneTasksWithNewIds(copiedTasksRef.current);
+
+        if (pastedTasks.length === 0) {
+            return;
+        }
+
+        const afterTaskId = getLowestSelectedTaskId(beforeTasks, beforeSelectedTaskIds);
+        const afterTasks = insertTasksAfter(beforeTasks, pastedTasks, afterTaskId);
+
+        commitTaskChange(
+            beforeTasks,
+            afterTasks,
+            beforeSelectedTaskIds,
+            beforeSelectedTaskIds,
+            "Paste task",
         );
     }
 
@@ -820,6 +891,10 @@ export default function App() {
         setIsSettingsDrawerOpen(true);
     }
 
+    function handleRefreshPlanner() {
+        window.location.reload();
+    }
+
     function clearMissingSelection(loadedTasks) {
         setSelectedTaskIds(function clearSelection(currentSelectedTaskIds) {
             const loadedTaskIds = new Set(loadedTasks.map(function mapTaskId(task) {
@@ -849,6 +924,8 @@ export default function App() {
         return task.id === selectedTaskId;
     }) || null;
     const canEditSelectedTask = selectedTaskIds.length === 1;
+    const canCopySelectedTasks = selectedTaskIds.length > 0;
+    const canPasteCopiedTasks = copiedTasks.length > 0;
     const selectedDatesHaveDayOff = hasDayOffForSelectedDates(dayOffs, selectedDayOffDates);
 
     return (
@@ -870,6 +947,8 @@ export default function App() {
                     isAssigneeSaving={isAssigneeSaving}
                     canRedo={historyState.canRedo}
                     canUndo={historyState.canUndo}
+                    canCopySelectedTasks={canCopySelectedTasks}
+                    canPasteCopiedTasks={canPasteCopiedTasks}
                     drawerMode={drawerMode}
                     dayOffDrawerMode={dayOffDrawerMode}
                     dayOffInitialValues={dayOffDrawerInitialValues}
@@ -888,12 +967,15 @@ export default function App() {
                         setIsSettingsDrawerOpen(false);
                     }}
                     onCreateTask={handleCreateTask}
+                    onCopySelectedTasks={handleCopySelectedTasks}
                     onDeleteSelectedTask={handleDeleteSelectedTask}
                     onEditSelectedTask={handleEditSelectedTask}
                     canEditSelectedTask={canEditSelectedTask}
                     onMoveTasks={handleMoveTasks}
                     onOpenTaskEdit={handleOpenTaskEdit}
                     onOpenDayOffEdit={handleOpenDayOffEdit}
+                    onPasteCopiedTasks={handlePasteCopiedTasks}
+                    onRefreshPlanner={handleRefreshPlanner}
                     onRedoTaskChange={handleRedoTaskChange}
                     onResizeTaskDates={handleResizeTaskDates}
                     onClearSelection={function clearSelection() {
@@ -1048,8 +1130,8 @@ function getNextColorMode(colorMode) {
 }
 
 
-function shouldUndoTasks(event, isDrawerOpen) {
-    if (isDrawerOpen || !isUndoKeyboardShortcut(event)) {
+function shouldUndoTasks(event, isAnyDrawerOpen) {
+    if (isAnyDrawerOpen || !isUndoKeyboardShortcut(event)) {
         return false;
     }
 
@@ -1057,8 +1139,34 @@ function shouldUndoTasks(event, isDrawerOpen) {
 }
 
 
-function shouldRedoTasks(event, isDrawerOpen) {
-    if (isDrawerOpen || !isRedoKeyboardShortcut(event)) {
+function shouldRedoTasks(event, isAnyDrawerOpen) {
+    if (isAnyDrawerOpen || !isRedoKeyboardShortcut(event)) {
+        return false;
+    }
+
+    return !isEditableTarget(event.target);
+}
+
+
+function shouldCopySelectedTasks(event, isAnyDrawerOpen, selectedTaskIds) {
+    if (event.repeat || isAnyDrawerOpen || selectedTaskIds.length === 0) {
+        return false;
+    }
+
+    if (!isCopyKeyboardShortcut(event)) {
+        return false;
+    }
+
+    return !isEditableTarget(event.target);
+}
+
+
+function shouldPasteCopiedTasks(event, isAnyDrawerOpen, copiedTasks) {
+    if (event.repeat || isAnyDrawerOpen || copiedTasks.length === 0) {
+        return false;
+    }
+
+    if (!isPasteKeyboardShortcut(event)) {
         return false;
     }
 
@@ -1067,12 +1175,14 @@ function shouldRedoTasks(event, isDrawerOpen) {
 
 
 function isUndoKeyboardShortcut(event) {
-    return (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z";
+    const isUndoKey = event.key.toLowerCase() === "z";
+
+    return isPlatformKeyboardShortcut(event) && !event.shiftKey && isUndoKey;
 }
 
 
 function isRedoKeyboardShortcut(event) {
-    if (!(event.ctrlKey || event.metaKey)) {
+    if (!isPlatformKeyboardShortcut(event)) {
         return false;
     }
 
@@ -1081,12 +1191,31 @@ function isRedoKeyboardShortcut(event) {
 }
 
 
-function shouldDeleteSelectedTasks(event, isDrawerOpen, selectedTaskIds) {
+function isCopyKeyboardShortcut(event) {
+    const isCopyKey = event.key.toLowerCase() === "c";
+
+    return isPlatformKeyboardShortcut(event) && !event.shiftKey && isCopyKey;
+}
+
+
+function isPasteKeyboardShortcut(event) {
+    const isPasteKey = event.key.toLowerCase() === "v";
+
+    return isPlatformKeyboardShortcut(event) && !event.shiftKey && isPasteKey;
+}
+
+
+function isPlatformKeyboardShortcut(event) {
+    return event.ctrlKey || event.metaKey;
+}
+
+
+function shouldDeleteSelectedTasks(event, isAnyDrawerOpen, selectedTaskIds) {
     if (event.key !== "Delete") {
         return false;
     }
 
-    if (event.repeat || isDrawerOpen || selectedTaskIds.length === 0) {
+    if (event.repeat || isAnyDrawerOpen || selectedTaskIds.length === 0) {
         return false;
     }
 
@@ -1125,6 +1254,16 @@ function cloneTasks(tasks) {
     return tasks.map(function cloneTask(task) {
         return {
             ...task,
+        };
+    });
+}
+
+
+function cloneTasksWithNewIds(tasks) {
+    return tasks.map(function cloneTaskWithNewId(task) {
+        return {
+            ...task,
+            id: createClientTaskId(),
         };
     });
 }
@@ -1177,6 +1316,20 @@ function getLastSelectedTaskId(selectedTaskIds) {
     }
 
     return selectedTaskIds[selectedTaskIds.length - 1];
+}
+
+
+function getLowestSelectedTaskId(tasks, selectedTaskIds) {
+    const selectedTaskIdSet = new Set(selectedTaskIds);
+    let lowestSelectedTaskId = null;
+
+    tasks.forEach(function findLowestSelectedTaskId(task) {
+        if (selectedTaskIdSet.has(task.id)) {
+            lowestSelectedTaskId = task.id;
+        }
+    });
+
+    return lowestSelectedTaskId;
 }
 
 
@@ -1291,6 +1444,15 @@ function getMovingTaskIds(tasks, selectedTaskIds, taskId) {
         .map(function mapTaskId(task) {
             return task.id;
         });
+}
+
+
+function getTasksByIdsInTaskOrder(tasks, taskIds) {
+    const taskIdSet = new Set(taskIds);
+
+    return tasks.filter(function matchSelectedTask(task) {
+        return taskIdSet.has(task.id);
+    });
 }
 
 
@@ -1435,8 +1597,17 @@ function getClampedStopDate(stopDate, startDate) {
 
 
 function insertTaskAfter(tasks, taskToInsert, afterTaskId) {
+    return insertTasksAfter(tasks, [taskToInsert], afterTaskId);
+}
+
+
+function insertTasksAfter(tasks, tasksToInsert, afterTaskId) {
+    if (tasksToInsert.length === 0) {
+        return tasks;
+    }
+
     if (!afterTaskId) {
-        return [...tasks, taskToInsert];
+        return [...tasks, ...tasksToInsert];
     }
 
     const selectedTaskIndex = tasks.findIndex(function matchTask(task) {
@@ -1444,12 +1615,12 @@ function insertTaskAfter(tasks, taskToInsert, afterTaskId) {
     });
 
     if (selectedTaskIndex < 0) {
-        return [...tasks, taskToInsert];
+        return [...tasks, ...tasksToInsert];
     }
 
     return [
         ...tasks.slice(0, selectedTaskIndex + 1),
-        taskToInsert,
+        ...tasksToInsert,
         ...tasks.slice(selectedTaskIndex + 1),
     ];
 }

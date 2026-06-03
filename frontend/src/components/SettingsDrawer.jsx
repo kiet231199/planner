@@ -13,8 +13,10 @@ export default function SettingsDrawer(props) {
     const {
         colorMode,
         open,
+        showTimelineHorizontalGridLines,
         onClose,
         onColorModeToggle,
+        onTimelineHorizontalGridLinesToggle,
     } = props;
 
     const isDarkMode = colorMode === "dark";
@@ -46,6 +48,15 @@ export default function SettingsDrawer(props) {
                         />
                     )}
                     label="Dark mode"
+                />
+                <FormControlLabel
+                    control={(
+                        <Switch
+                            checked={showTimelineHorizontalGridLines}
+                            onChange={onTimelineHorizontalGridLinesToggle}
+                        />
+                    )}
+                    label="Timeline horizontal gridlines"
                 />
             </Box>
         </Drawer>

@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Typography } from "@mui/material";
 
 import {
     getDateDeltaDays,
     getDurationDays,
     getTimelineDateAtOffset,
-    getTimelineMetrics,
     getTimelineOffsetForDate,
+    getTimelineScaleMetrics,
+    getTimelineTaskBars,
 } from "../utils/chartScale";
 import {
     DAY_OFF_ALL_ASSIGNEES,
@@ -18,6 +19,12 @@ import {
 const DRAG_MOUSE_BUTTON = 0;
 const MIN_RESIZE_PREVIEW_WIDTH_PIXELS = 28;
 const MIN_TIMELINE_HEADER_ROW_COUNT = 1;
+const MIN_TIMELINE_BODY_ROW_COUNT = 1;
+const TIMELINE_GRID_LINE_WIDTH_PIXELS = 1;
+const TIMELINE_TODAY_LINE_WIDTH_PIXELS = 2;
+const TIMELINE_PAN_MOVED_THRESHOLD_PIXELS = 1;
+const TIMELINE_HEADER_OVERSCAN_PIXELS = 720;
+const TIMELINE_VISIBLE_RANGE_STEP_PIXELS = 240;
 const START_RESIZE_EDGE = "start";
 const STOP_RESIZE_EDGE = "stop";
 const TASK_DRAG_THRESHOLD_PIXELS = 4;
@@ -42,6 +49,10 @@ const COMPLETED_PROGRESS_PERCENT = 100;
 const PERCENT_DIVISOR = 100;
 const MINIMUM_TASK_DURATION_DAYS = 1;
 const NO_ELAPSED_TASK_DAYS = 0;
+const INITIAL_VISIBLE_TIMELINE_RANGE = {
+    left: 0,
+    right: TIMELINE_HEADER_OVERSCAN_PIXELS * 2,
+};
 
 
 export default function TimelineChart(props) {
@@ -54,6 +65,7 @@ export default function TimelineChart(props) {
         isRowReorderDisabled = false,
         selectedDayOffDates = [],
         selectedTaskIds,
+        showTimelineHorizontalGridLines = true,
         zoomIndex,
         onClearHighlight,
         onClearSelection,
@@ -72,24 +84,90 @@ export default function TimelineChart(props) {
     const dragStateRef = useRef(null);
     const didSetInitialScrollRef = useRef(false);
     const metricsRef = useRef(null);
+    const onClearHighlightRef = useRef(onClearHighlight);
+    const onClearSelectionRef = useRef(onClearSelection);
     const onMoveTasksRef = useRef(onMoveTasks);
     const onResizeTaskDatesRef = useRef(onResizeTaskDates);
     const onSelectTaskRef = useRef(onSelectTask);
     const onTimelineZoomRef = useRef(onTimelineZoom);
+    const pendingTaskDragPointerRef = useRef(null);
     const pendingZoomAnchorRef = useRef(null);
+    const pendingResizeAnchorRef = useRef(null);
     const pendingDaySelectionTimeoutRef = useRef(null);
-    const [isDragging, setIsDragging] = useState(false);
+    const panelSizeFrameIdRef = useRef(null);
+    const visibleTimelineRangeFrameIdRef = useRef(null);
+    const pendingTimelinePanPointerRef = useRef(null);
+    const pendingWheelZoomDirectionRef = useRef(null);
+    const taskDragFrameIdRef = useRef(null);
+    const timelinePanFrameIdRef = useRef(null);
+    const timelineZoomFrameIdRef = useRef(null);
+    const taskBarElementsRef = useRef(new Map());
+    const taskDragPreviewTaskIdsRef = useRef([]);
+    const taskHoverBubbleRef = useRef(null);
+    const taskHoverBubbleTaskIdRef = useRef(null);
+    const taskHoverFrameIdRef = useRef(null);
+    const taskHoverPositionRef = useRef(null);
+    const pendingTaskHoverPositionRef = useRef(null);
     const [panelWidth, setPanelWidth] = useState(0);
+    const [panelHeight, setPanelHeight] = useState(0);
     const [taskDragPreview, setTaskDragPreview] = useState(null);
     const [taskHoverBubble, setTaskHoverBubble] = useState(null);
+    const [visibleTimelineRange, setVisibleTimelineRange] = useState(
+        INITIAL_VISIBLE_TIMELINE_RANGE,
+    );
 
-    const metrics = getTimelineMetrics(tasks, zoomIndex, panelWidth);
-    const chartHeight = metrics.headerHeight + Math.max(tasks.length, 1) * metrics.rowHeight;
+    const scaleMetrics = useMemo(function memoizeTimelineScaleMetrics() {
+        return getTimelineScaleMetrics(tasks, zoomIndex, panelWidth);
+    }, [panelWidth, tasks, zoomIndex]);
+    const timelineTaskBars = useMemo(function memoizeTimelineTaskBars() {
+        return getTimelineTaskBars(tasks, scaleMetrics.gridCells);
+    }, [scaleMetrics.gridCells, tasks]);
+    const metrics = useMemo(function memoizeTimelineMetrics() {
+        return {
+            ...scaleMetrics,
+            bars: timelineTaskBars,
+        };
+    }, [scaleMetrics, timelineTaskBars]);
+    const draggedTaskIdSet = useMemo(function memoizeDraggedTaskIdSet() {
+        if (!taskDragPreview) {
+            return new Set();
+        }
+
+        return new Set(taskDragPreview.taskIds);
+    }, [taskDragPreview]);
+    const visibleBodyRowCount = useMemo(function memoizeVisibleBodyRowCount() {
+        return getVisibleBodyRowCount(panelHeight, metrics);
+    }, [metrics, panelHeight]);
+    const timelineBodyRowCount = Math.max(
+        tasks.length,
+        visibleBodyRowCount,
+        MIN_TIMELINE_BODY_ROW_COUNT,
+    );
+    const timelineBackground = useMemo(function memoizeTimelineBackground() {
+        return getTimelineBackground(scaleMetrics, timelineBodyRowCount);
+    }, [scaleMetrics, timelineBodyRowCount]);
+    const timelineBodyHeight = timelineBackground.bodyHeight;
+    const timelineTodayHighlight = timelineBackground.todayHighlight;
+    const timelineHeaderLayoutRows = useMemo(function memoizeTimelineHeaderLayoutRows() {
+        return getTimelineHeaderLayoutRows(metrics.headerRows);
+    }, [metrics.headerRows]);
+    const timelineHeaderRows = useMemo(function memoizeVisibleTimelineHeaderRows() {
+        return getVisibleTimelineHeaderRows(timelineHeaderLayoutRows, visibleTimelineRange);
+    }, [timelineHeaderLayoutRows, visibleTimelineRange]);
+    const chartHeight = metrics.headerHeight + timelineBodyHeight;
     const headerRowHeight = getTimelineHeaderRowHeight(metrics.headerHeight, metrics.headerRows);
-    const taskRowHighlights = getTaskRowHighlights(tasks, selectedTaskIds, highlightedTaskId);
-    const selectedDayOffDateSet = new Set(selectedDayOffDates);
-    const selectedDayHighlights = getSelectedDayHighlights(selectedDayOffDates, metrics);
-    const dayOffHighlights = getDayOffHighlights(dayOffs, tasks, metrics);
+    const taskRowHighlights = useMemo(function memoizeTaskRowHighlights() {
+        return getTaskRowHighlights(tasks, selectedTaskIds, highlightedTaskId);
+    }, [highlightedTaskId, selectedTaskIds, tasks]);
+    const selectedDayOffDateSet = useMemo(function memoizeSelectedDayOffDateSet() {
+        return new Set(selectedDayOffDates);
+    }, [selectedDayOffDates]);
+    const selectedDayHighlights = useMemo(function memoizeSelectedDayHighlights() {
+        return getSelectedDayHighlights(selectedDayOffDates, metrics);
+    }, [metrics, selectedDayOffDates]);
+    const dayOffHighlights = useMemo(function memoizeDayOffHighlights() {
+        return getDayOffHighlights(dayOffs, tasks, metrics);
+    }, [dayOffs, metrics, tasks]);
     metricsRef.current = metrics;
 
     const setTimelinePanelElement = useCallback(function setTimelinePanelElement(panel) {
@@ -98,11 +176,20 @@ export default function TimelineChart(props) {
         if (externalPanelRef) {
             externalPanelRef.current = panel;
         }
+
+        if (panel) {
+            scheduleVisibleTimelineRangeUpdate(panel);
+        }
     }, [externalPanelRef]);
 
     useEffect(function keepTimelineZoomHandlerCurrent() {
         onTimelineZoomRef.current = onTimelineZoom;
     }, [onTimelineZoom]);
+
+    useEffect(function keepTimelineClearHandlersCurrent() {
+        onClearHighlightRef.current = onClearHighlight;
+        onClearSelectionRef.current = onClearSelection;
+    }, [onClearHighlight, onClearSelection]);
 
     useEffect(function keepTaskDragHandlersCurrent() {
         onMoveTasksRef.current = onMoveTasks;
@@ -111,37 +198,51 @@ export default function TimelineChart(props) {
     }, [onMoveTasks, onResizeTaskDates, onSelectTask]);
 
     useEffect(function clearPendingDaySelectionOnUnmount() {
-        return function clearPendingDaySelectionTimeout() {
+        return function clearPendingTimelineWork() {
             clearPendingDaySelection();
+            cancelPanelSizeFrame();
+            cancelTaskDragPreviewFrame();
+            cancelTaskHoverFrame();
+            cancelTimelinePanFrame();
+            cancelTimelineZoomFrame();
+            cancelVisibleTimelineRangeFrame();
+            clearMoveTaskDragPreview();
+            taskBarElementsRef.current.clear();
         };
     }, []);
 
-    useLayoutEffect(function trackTimelinePanelWidth() {
+    useLayoutEffect(function keepTaskHoverBubblePositionSynced() {
+        applyStoredTaskHoverBubblePosition();
+    });
+
+    useLayoutEffect(function trackTimelinePanelSize() {
         const panel = timelinePanelRef.current;
 
         if (!panel) {
             return undefined;
         }
 
-        function updatePanelWidth() {
-            setPanelWidth(panel.clientWidth);
+        function scheduleObservedPanelSizeUpdate() {
+            schedulePanelSizeUpdate(panel);
         }
 
-        updatePanelWidth();
+        scheduleObservedPanelSizeUpdate();
 
         if (typeof ResizeObserver === "undefined") {
-            window.addEventListener("resize", updatePanelWidth);
+            window.addEventListener("resize", scheduleObservedPanelSizeUpdate);
 
             return function removeWindowResizeListener() {
-                window.removeEventListener("resize", updatePanelWidth);
+                window.removeEventListener("resize", scheduleObservedPanelSizeUpdate);
+                cancelPanelSizeFrame();
             };
         }
 
-        const resizeObserver = new ResizeObserver(updatePanelWidth);
+        const resizeObserver = new ResizeObserver(scheduleObservedPanelSizeUpdate);
         resizeObserver.observe(panel);
 
         return function disconnectResizeObserver() {
             resizeObserver.disconnect();
+            cancelPanelSizeFrame();
         };
     }, []);
 
@@ -159,6 +260,7 @@ export default function TimelineChart(props) {
         if (!didSetInitialScrollRef.current) {
             panel.scrollLeft = getCenteredTodayScrollLeft(panel, metrics);
             didSetInitialScrollRef.current = true;
+            updateVisibleTimelineRange(panel);
             return;
         }
 
@@ -171,34 +273,263 @@ export default function TimelineChart(props) {
             );
             panel.scrollLeft = anchorOffset - anchor.viewportOffset;
             pendingZoomAnchorRef.current = null;
+            updateVisibleTimelineRange(panel);
             return;
         }
+
+        if (pendingResizeAnchorRef.current) {
+            const anchor = pendingResizeAnchorRef.current;
+            const anchorOffset = getTimelineOffsetForDate(
+                anchor.date,
+                anchor.dayRatio,
+                metrics.gridCells,
+            );
+
+            panel.scrollLeft = anchorOffset - anchor.viewportOffset;
+            pendingResizeAnchorRef.current = null;
+            updateVisibleTimelineRange(panel);
+            return;
+        }
+
+        updateVisibleTimelineRange(panel);
     }, [isLoading, metrics]);
+
+    function schedulePanelSizeUpdate(panel) {
+        if (didSetInitialScrollRef.current && metricsRef.current) {
+            pendingResizeAnchorRef.current = getPanelCenterAnchor(
+                panel,
+                metricsRef.current.gridCells,
+            );
+        }
+
+        if (panelSizeFrameIdRef.current !== null) {
+            return;
+        }
+
+        panelSizeFrameIdRef.current = window.requestAnimationFrame(
+            function updatePanelSizeFrame() {
+                const nextPanelWidth = panel.clientWidth;
+                const nextPanelHeight = panel.clientHeight;
+
+                panelSizeFrameIdRef.current = null;
+
+                updateVisibleTimelineRange(panel);
+                setPanelWidth(function updateMeasuredPanelWidth(currentPanelWidth) {
+                    if (currentPanelWidth === nextPanelWidth) {
+                        pendingResizeAnchorRef.current = null;
+                        return currentPanelWidth;
+                    }
+
+                    return nextPanelWidth;
+                });
+                setPanelHeight(function updateMeasuredPanelHeight(currentPanelHeight) {
+                    if (currentPanelHeight === nextPanelHeight) {
+                        return currentPanelHeight;
+                    }
+
+                    return nextPanelHeight;
+                });
+            },
+        );
+    }
+
+    function cancelPanelSizeFrame() {
+        if (panelSizeFrameIdRef.current === null) {
+            return;
+        }
+
+        window.cancelAnimationFrame(panelSizeFrameIdRef.current);
+        panelSizeFrameIdRef.current = null;
+        pendingResizeAnchorRef.current = null;
+    }
+
+    function scheduleVisibleTimelineRangeUpdate(panel) {
+        if (visibleTimelineRangeFrameIdRef.current !== null) {
+            return;
+        }
+
+        visibleTimelineRangeFrameIdRef.current = window.requestAnimationFrame(
+            function updateVisibleTimelineRangeFrame() {
+                visibleTimelineRangeFrameIdRef.current = null;
+
+                if (!panel || panel !== timelinePanelRef.current) {
+                    return;
+                }
+
+                updateVisibleTimelineRange(panel);
+            },
+        );
+    }
+
+    function updateVisibleTimelineRange(panel) {
+        const timelineWidth = metricsRef.current ? metricsRef.current.timelineWidth : 0;
+        const nextVisibleTimelineRange = getVisibleTimelineRange(panel, timelineWidth);
+
+        setVisibleTimelineRange(function updateCurrentVisibleTimelineRange(
+            currentVisibleTimelineRange,
+        ) {
+            if (
+                hasSameVisibleTimelineRange(
+                    currentVisibleTimelineRange,
+                    nextVisibleTimelineRange,
+                )
+            ) {
+                return currentVisibleTimelineRange;
+            }
+
+            return nextVisibleTimelineRange;
+        });
+    }
+
+    function cancelVisibleTimelineRangeFrame() {
+        if (visibleTimelineRangeFrameIdRef.current === null) {
+            return;
+        }
+
+        window.cancelAnimationFrame(visibleTimelineRangeFrameIdRef.current);
+        visibleTimelineRangeFrameIdRef.current = null;
+    }
+
+    function scheduleTimelinePan(dragState, event) {
+        pendingTimelinePanPointerRef.current = {
+            clientX: event.clientX,
+            clientY: event.clientY,
+        };
+
+        if (timelinePanFrameIdRef.current !== null) {
+            return;
+        }
+
+        timelinePanFrameIdRef.current = window.requestAnimationFrame(
+            function updateTimelinePanFrame() {
+                const pendingPointer = pendingTimelinePanPointerRef.current;
+
+                timelinePanFrameIdRef.current = null;
+                pendingTimelinePanPointerRef.current = null;
+
+                if (!pendingPointer || dragStateRef.current !== dragState) {
+                    return;
+                }
+
+                updateTimelinePan(dragState, pendingPointer);
+            },
+        );
+    }
+
+    function updateTimelinePan(dragState, pointer) {
+        const dragDistance = pointer.clientX - dragState.startClientX;
+        const movement = getPointerMovement(dragState, pointer);
+
+        if (movement >= TIMELINE_PAN_MOVED_THRESHOLD_PIXELS) {
+            dragState.hasMoved = true;
+        }
+
+        dragState.panel.scrollLeft = dragState.startScrollLeft - dragDistance;
+    }
+
+    function flushTimelinePanFrame(dragState) {
+        const pendingPointer = pendingTimelinePanPointerRef.current;
+
+        if (timelinePanFrameIdRef.current !== null) {
+            window.cancelAnimationFrame(timelinePanFrameIdRef.current);
+            timelinePanFrameIdRef.current = null;
+        }
+
+        pendingTimelinePanPointerRef.current = null;
+
+        if (!pendingPointer) {
+            return;
+        }
+
+        updateTimelinePan(dragState, pendingPointer);
+    }
+
+    function cancelTimelinePanFrame() {
+        if (timelinePanFrameIdRef.current === null) {
+            return;
+        }
+
+        window.cancelAnimationFrame(timelinePanFrameIdRef.current);
+        timelinePanFrameIdRef.current = null;
+        pendingTimelinePanPointerRef.current = null;
+    }
+
+    function scheduleTimelineZoom(zoomDirection) {
+        pendingWheelZoomDirectionRef.current = zoomDirection;
+
+        if (timelineZoomFrameIdRef.current !== null) {
+            return;
+        }
+
+        timelineZoomFrameIdRef.current = window.requestAnimationFrame(
+            function updateTimelineZoomFrame() {
+                const pendingZoomDirection = pendingWheelZoomDirectionRef.current;
+
+                timelineZoomFrameIdRef.current = null;
+                pendingWheelZoomDirectionRef.current = null;
+
+                if (pendingZoomDirection === null) {
+                    return;
+                }
+
+                onTimelineZoomRef.current(pendingZoomDirection);
+            },
+        );
+    }
+
+
+    function cancelTimelineZoomFrame() {
+        if (timelineZoomFrameIdRef.current === null) {
+            return;
+        }
+
+        window.cancelAnimationFrame(timelineZoomFrameIdRef.current);
+        timelineZoomFrameIdRef.current = null;
+        pendingWheelZoomDirectionRef.current = null;
+    }
+
+
+    function clearTimelineSelection() {
+        onClearHighlightRef.current();
+        onClearSelectionRef.current();
+    }
 
     useEffect(function bindDragListeners() {
         function handleMouseMove(event) {
-            if (!dragStateRef.current) {
+            const dragState = dragStateRef.current;
+
+            if (!dragState) {
                 return;
             }
 
-            if (isTaskInteractionDrag(dragStateRef.current)) {
-                updateTaskDragPreview(dragStateRef.current, event);
+            if (isTaskInteractionDrag(dragState)) {
+                scheduleTaskDragPreview(dragState, event);
                 return;
             }
 
-            const panel = dragStateRef.current.panel;
-            const dragDistance = event.clientX - dragStateRef.current.startClientX;
-            panel.scrollLeft = dragStateRef.current.startScrollLeft - dragDistance;
+            scheduleTimelinePan(dragState, event);
         }
 
         function handleMouseUp(event) {
-            if (dragStateRef.current && isTaskInteractionDrag(dragStateRef.current)) {
-                finishTaskDrag(dragStateRef.current, event);
+            const dragState = dragStateRef.current;
+
+            if (!dragState) {
                 return;
             }
 
+            if (isTaskInteractionDrag(dragState)) {
+                finishTaskDrag(dragState, event);
+                return;
+            }
+
+            flushTimelinePanFrame(dragState);
+
             dragStateRef.current = null;
-            setIsDragging(false);
+            setTimelinePanelDragging(dragState.panel, false);
+
+            if (!dragState.hasMoved) {
+                clearTimelineSelection();
+            }
         }
 
         window.addEventListener("mousemove", handleMouseMove);
@@ -207,6 +538,8 @@ export default function TimelineChart(props) {
         return function removeDragListeners() {
             window.removeEventListener("mousemove", handleMouseMove);
             window.removeEventListener("mouseup", handleMouseUp);
+            cancelTimelinePanFrame();
+            setTimelinePanelDragging(timelinePanelRef.current, false);
         };
     }, []);
 
@@ -225,7 +558,7 @@ export default function TimelineChart(props) {
                     event,
                     metricsRef.current.gridCells,
                 );
-                onTimelineZoomRef.current(getWheelZoomDirection(event));
+                scheduleTimelineZoom(getWheelZoomDirection(event));
                 return;
             }
 
@@ -241,8 +574,14 @@ export default function TimelineChart(props) {
 
         return function removeWheelListener() {
             panel.removeEventListener("wheel", handleTimelineWheel);
+            cancelTimelineZoomFrame();
         };
     }, []);
+
+    function handleTimelinePanelScroll(event) {
+        scheduleVisibleTimelineRangeUpdate(event.currentTarget);
+        onPanelScroll(event);
+    }
 
     function handleTimelineMouseDown(event) {
         if (event.button !== DRAG_MOUSE_BUTTON) {
@@ -252,9 +591,6 @@ export default function TimelineChart(props) {
         if (event.target instanceof Element && event.target.closest(".task-bar")) {
             return;
         }
-
-        onClearHighlight();
-        onClearSelection();
 
         const panel = timelinePanelRef.current;
 
@@ -267,9 +603,11 @@ export default function TimelineChart(props) {
         dragStateRef.current = {
             panel,
             startClientX: event.clientX,
+            startClientY: event.clientY,
             startScrollLeft: panel.scrollLeft,
+            hasMoved: false,
         };
-        setIsDragging(true);
+        setTimelinePanelDragging(panel, true);
     }
 
     function handleTaskBarMouseDown(event, task) {
@@ -285,7 +623,7 @@ export default function TimelineChart(props) {
 
         event.preventDefault();
         event.stopPropagation();
-        setTaskHoverBubble(null);
+        hideTaskHoverBubble();
 
         const selectionMode = getTaskSelectionMode(event);
 
@@ -322,15 +660,95 @@ export default function TimelineChart(props) {
     }
 
     function handleTaskBarMouseMove(event, task) {
-        setTaskHoverBubble({
-            task,
-            x: event.clientX,
-            y: event.clientY + TASK_HOVER_BUBBLE_OFFSET_Y_PIXELS,
-        });
+        if (dragStateRef.current && isTaskInteractionDrag(dragStateRef.current)) {
+            return;
+        }
+
+        showTaskHoverBubble(event, task);
     }
 
     function handleTaskBarMouseLeave() {
+        hideTaskHoverBubble();
+    }
+
+    function showTaskHoverBubble(event, task) {
+        scheduleTaskHoverBubblePosition(event);
+
+        if (taskHoverBubbleTaskIdRef.current === task.id) {
+            return;
+        }
+
+        taskHoverBubbleTaskIdRef.current = task.id;
+        setTaskHoverBubble({ task });
+    }
+
+    function hideTaskHoverBubble() {
+        taskHoverBubbleTaskIdRef.current = null;
+        taskHoverPositionRef.current = null;
+        pendingTaskHoverPositionRef.current = null;
+        cancelTaskHoverFrame();
         setTaskHoverBubble(null);
+    }
+
+    function scheduleTaskHoverBubblePosition(event) {
+        const nextPosition = {
+            x: event.clientX,
+            y: event.clientY + TASK_HOVER_BUBBLE_OFFSET_Y_PIXELS,
+        };
+
+        pendingTaskHoverPositionRef.current = nextPosition;
+        taskHoverPositionRef.current = nextPosition;
+
+        if (taskHoverFrameIdRef.current !== null) {
+            return;
+        }
+
+        taskHoverFrameIdRef.current = window.requestAnimationFrame(
+            function updateTaskHoverBubblePositionFrame() {
+                taskHoverFrameIdRef.current = null;
+                flushTaskHoverBubblePosition();
+            },
+        );
+    }
+
+    function flushTaskHoverBubblePosition() {
+        const pendingPosition = pendingTaskHoverPositionRef.current;
+
+        if (!pendingPosition) {
+            return;
+        }
+
+        pendingTaskHoverPositionRef.current = null;
+        applyTaskHoverBubblePosition(pendingPosition);
+    }
+
+    function applyStoredTaskHoverBubblePosition() {
+        const currentPosition = taskHoverPositionRef.current;
+
+        if (!currentPosition) {
+            return;
+        }
+
+        applyTaskHoverBubblePosition(currentPosition);
+    }
+
+    function applyTaskHoverBubblePosition(position) {
+        const bubbleElement = taskHoverBubbleRef.current;
+
+        if (!bubbleElement) {
+            return;
+        }
+
+        bubbleElement.style.transform = getTaskHoverBubbleTransform(position.x, position.y);
+    }
+
+    function cancelTaskHoverFrame() {
+        if (taskHoverFrameIdRef.current === null) {
+            return;
+        }
+
+        window.cancelAnimationFrame(taskHoverFrameIdRef.current);
+        taskHoverFrameIdRef.current = null;
     }
 
     function handleHeaderDayMouseDown(event, segment) {
@@ -423,7 +841,7 @@ export default function TimelineChart(props) {
 
         event.preventDefault();
         event.stopPropagation();
-        setTaskHoverBubble(null);
+        hideTaskHoverBubble();
         onHighlightTask(task.id);
 
         if (selectedTaskIds.length > 1) {
@@ -450,18 +868,53 @@ export default function TimelineChart(props) {
         };
     }
 
-    function updateTaskDragPreview(dragState, event) {
-        const movement = getPointerMovement(dragState, event);
+    function scheduleTaskDragPreview(dragState, event) {
+        pendingTaskDragPointerRef.current = {
+            clientX: event.clientX,
+            clientY: event.clientY,
+        };
 
-        if (!dragState.hasMoved && movement < TASK_DRAG_THRESHOLD_PIXELS) {
+        if (taskDragFrameIdRef.current !== null) {
+            return;
+        }
+
+        taskDragFrameIdRef.current = window.requestAnimationFrame(
+            function runTaskDragPreviewFrame() {
+                const pendingPointer = pendingTaskDragPointerRef.current;
+
+                taskDragFrameIdRef.current = null;
+                pendingTaskDragPointerRef.current = null;
+
+                if (!pendingPointer || dragStateRef.current !== dragState) {
+                    return;
+                }
+
+                updateTaskDragPreview(dragState, pendingPointer);
+            },
+        );
+    }
+
+    function updateTaskDragPreview(dragState, pointer) {
+        const movement = getPointerMovement(dragState, pointer);
+        const hasJustStartedMoving = !dragState.hasMoved;
+
+        if (hasJustStartedMoving && movement < TASK_DRAG_THRESHOLD_PIXELS) {
             return;
         }
 
         dragState.hasMoved = true;
-        setTaskHoverBubble(null);
-        dragState.dayDelta = getTaskDragDayDelta(dragState, event);
-        dragState.pixelDelta = event.clientX - dragState.startClientX;
-        dragState.pixelDeltaY = getTaskDragPreviewPixelDeltaY(dragState, event);
+
+        if (hasJustStartedMoving) {
+            hideTaskHoverBubble();
+        }
+
+        dragState.pixelDelta = pointer.clientX - dragState.startClientX;
+        dragState.pixelDeltaY = getTaskDragPreviewPixelDeltaY(dragState, pointer);
+
+        if (dragState.type === TASK_DRAG_TYPE_MOVE) {
+            applyMoveTaskDragPreview(dragState);
+            return;
+        }
 
         setTaskDragPreview({
             taskId: dragState.taskId,
@@ -473,12 +926,89 @@ export default function TimelineChart(props) {
         });
     }
 
+    function applyMoveTaskDragPreview(dragState) {
+        const activeTaskIds = new Set(dragState.taskIds);
+
+        taskDragPreviewTaskIdsRef.current.forEach(function clearInactiveTaskPreview(taskId) {
+            if (activeTaskIds.has(taskId)) {
+                return;
+            }
+
+            clearTaskBarMovePreview(taskId);
+        });
+
+        dragState.taskIds.forEach(function applyTaskMovePreview(taskId) {
+            applyTaskBarMovePreview(taskId, dragState);
+        });
+
+        taskDragPreviewTaskIdsRef.current = [...dragState.taskIds];
+    }
+
+    function applyTaskBarMovePreview(taskId, dragState) {
+        const taskBarElement = taskBarElementsRef.current.get(taskId);
+
+        if (!taskBarElement) {
+            return;
+        }
+
+        taskBarElement.classList.add("task-bar-drag-preview");
+        taskBarElement.style.transform = getTaskBarMoveTransform(
+            dragState.pixelDelta,
+            dragState.pixelDeltaY,
+        );
+    }
+
+    function clearMoveTaskDragPreview() {
+        taskDragPreviewTaskIdsRef.current.forEach(clearTaskBarMovePreview);
+        taskDragPreviewTaskIdsRef.current = [];
+    }
+
+    function clearTaskBarMovePreview(taskId) {
+        const taskBarElement = taskBarElementsRef.current.get(taskId);
+
+        if (!taskBarElement) {
+            return;
+        }
+
+        taskBarElement.classList.remove("task-bar-drag-preview");
+        taskBarElement.style.transform = "";
+    }
+
+    function cancelTaskDragPreviewFrame() {
+        if (taskDragFrameIdRef.current === null) {
+            return;
+        }
+
+        window.cancelAnimationFrame(taskDragFrameIdRef.current);
+        taskDragFrameIdRef.current = null;
+        pendingTaskDragPointerRef.current = null;
+    }
+
+    function flushTaskDragPreviewFrame(dragState) {
+        const pendingPointer = pendingTaskDragPointerRef.current;
+
+        if (taskDragFrameIdRef.current !== null) {
+            window.cancelAnimationFrame(taskDragFrameIdRef.current);
+            taskDragFrameIdRef.current = null;
+        }
+
+        pendingTaskDragPointerRef.current = null;
+
+        if (!pendingPointer) {
+            return;
+        }
+
+        updateTaskDragPreview(dragState, pendingPointer);
+    }
+
     function handleTimelineMouseLeave() {
-        setTaskHoverBubble(null);
+        hideTaskHoverBubble();
     }
 
     function finishTaskDrag(dragState, event) {
+        flushTaskDragPreviewFrame(dragState);
         dragStateRef.current = null;
+        clearMoveTaskDragPreview();
         setTaskDragPreview(null);
 
         if (!dragState.hasMoved) {
@@ -499,13 +1029,43 @@ export default function TimelineChart(props) {
         }
     }
 
+    function setTaskBarElement(taskId, taskBarElement) {
+        if (!taskBarElement) {
+            taskBarElementsRef.current.delete(taskId);
+            return;
+        }
+
+        taskBarElementsRef.current.set(taskId, taskBarElement);
+        applyCurrentTaskBarMovePreview(taskId);
+    }
+
+    function setTaskHoverBubbleElement(bubbleElement) {
+        taskHoverBubbleRef.current = bubbleElement;
+        applyStoredTaskHoverBubblePosition();
+    }
+
+    function applyCurrentTaskBarMovePreview(taskId) {
+        const dragState = dragStateRef.current;
+
+        if (
+            !dragState
+            || dragState.type !== TASK_DRAG_TYPE_MOVE
+            || !dragState.hasMoved
+            || !dragState.taskIds.includes(taskId)
+        ) {
+            return;
+        }
+
+        applyTaskBarMovePreview(taskId, dragState);
+    }
+
     return (
         <Box
             ref={setTimelinePanelElement}
-            className={isDragging ? "timeline-panel timeline-panel-dragging" : "timeline-panel"}
+            className="timeline-panel"
             onMouseDown={handleTimelineMouseDown}
             onMouseLeave={handleTimelineMouseLeave}
-            onScroll={onPanelScroll}
+            onScroll={handleTimelinePanelScroll}
         >
             <Box
                 className="timeline-canvas"
@@ -515,14 +1075,14 @@ export default function TimelineChart(props) {
                 }}
             >
                 <Box className="timeline-header" sx={{ height: `${metrics.headerHeight}px` }}>
-                    {metrics.headerRows.map(function renderHeaderRow(headerRow, rowIndex) {
+                    {timelineHeaderRows.map(function renderHeaderRow(headerRow, rowIndex) {
                         return (
                             <Box
                                 key={rowIndex}
                                 className="timeline-header-row"
                                 sx={{ height: `${headerRowHeight}px` }}
                             >
-                                {headerRow.map(function renderHeaderCell(segment) {
+                                {headerRow.cells.map(function renderHeaderCell(segment) {
                                     const isSelectableDayCell = isTimelineHeaderDayCell(
                                         metrics,
                                         rowIndex,
@@ -544,7 +1104,10 @@ export default function TimelineChart(props) {
                                                 isSelectableDayCell,
                                                 isSelectedDayCell,
                                             )}
-                                            sx={{ width: `${segment.width}px` }}
+                                            sx={{
+                                                left: `${segment.left}px`,
+                                                width: `${segment.width}px`,
+                                            }}
                                             onKeyDown={isSelectableDayCell
                                                 ? function selectHeaderDayByKeyboard(event) {
                                                     handleHeaderDayKeyDown(event, segment);
@@ -565,6 +1128,17 @@ export default function TimelineChart(props) {
                                         </Box>
                                     );
                                 })}
+                                {headerRow.gridLines.map(function renderHeaderGridLine(gridLine) {
+                                    return (
+                                        <Box
+                                            key={gridLine.key}
+                                            className="timeline-header-grid-line"
+                                            sx={{
+                                                left: `${gridLine.left}px`,
+                                            }}
+                                        />
+                                    );
+                                })}
                             </Box>
                         );
                     })}
@@ -576,39 +1150,58 @@ export default function TimelineChart(props) {
                         bottom: 0,
                     }}
                 >
-                    {metrics.gridCells.map(function renderGridCell(cell) {
-                        const weekendShadowSegments = getWeekendShadowSegments(metrics, cell);
-                        const todayHighlight = getTodayHighlight(metrics, cell);
-
-                        return (
-                            <Box
-                                key={cell.key}
-                                className="timeline-grid-column"
-                                sx={{ width: `${cell.width}px` }}
-                            >
-                                {weekendShadowSegments.map(function renderWeekendShadowSegment(
-                                    segment,
-                                ) {
-                                    return (
-                                        <Box
-                                            key={segment.key}
-                                            className="timeline-weekend-shadow-segment"
-                                            sx={{
-                                                left: `${segment.left}px`,
-                                                width: `${segment.width}px`,
-                                            }}
-                                        />
-                                    );
-                                })}
-                                {todayHighlight && (
-                                    <Box
-                                        className={getTodayHighlightClassName(todayHighlight)}
-                                        sx={getTodayHighlightStyle(todayHighlight)}
+                    <svg
+                        aria-hidden="true"
+                        className="timeline-grid-svg"
+                        focusable="false"
+                        height={timelineBodyHeight}
+                        viewBox={`0 0 ${metrics.timelineWidth} ${timelineBodyHeight}`}
+                        width={metrics.timelineWidth}
+                    >
+                        {timelineBackground.weekendHighlights.map(
+                            function renderWeekendHighlight(highlight) {
+                                return (
+                                    <rect
+                                        key={highlight.key}
+                                        className="timeline-weekend-highlight"
+                                        height={highlight.height}
+                                        width={highlight.width}
+                                        x={highlight.left}
+                                        y={0}
                                     />
-                                )}
-                            </Box>
-                        );
-                    })}
+                                );
+                            },
+                        )}
+                        {timelineTodayHighlight?.mode === TODAY_HIGHLIGHT_MODE_COLUMN && (
+                            <rect
+                                className="timeline-today-highlight-column"
+                                height={timelineTodayHighlight.height}
+                                width={timelineTodayHighlight.width}
+                                x={timelineTodayHighlight.left}
+                                y={0}
+                            />
+                        )}
+                        {timelineTodayHighlight?.mode === TODAY_HIGHLIGHT_MODE_LINE && (
+                            <line
+                                className="timeline-today-highlight-line"
+                                strokeWidth={TIMELINE_TODAY_LINE_WIDTH_PIXELS}
+                                x1={timelineTodayHighlight.left}
+                                x2={timelineTodayHighlight.left}
+                                y1={0}
+                                y2={timelineTodayHighlight.height}
+                            />
+                        )}
+                        <path
+                            className="timeline-grid-path"
+                            d={timelineBackground.verticalGridPath}
+                        />
+                        {showTimelineHorizontalGridLines && (
+                            <path
+                                className="timeline-grid-path"
+                                d={timelineBackground.horizontalGridPath}
+                            />
+                        )}
+                    </svg>
                 </Box>
                 <Box
                     className="timeline-day-off-highlights"
@@ -678,8 +1271,17 @@ export default function TimelineChart(props) {
                     {metrics.bars.map(function renderTaskBar(bar) {
                         const isSelected = selectedTaskIds.includes(bar.task.id);
                         const isDelayed = isTaskDelayed(bar.task, metrics.todayDate);
-                        const taskBarLayout = getTaskBarLayout(bar, taskDragPreview);
+                        const isTaskDragPreviewTarget = draggedTaskIdSet.has(bar.task.id);
+                        const taskBarLayout = getTaskBarLayout(
+                            bar,
+                            taskDragPreview,
+                            isTaskDragPreviewTarget,
+                        );
                         const taskBarVisualLayout = getTaskBarVisualLayout(taskBarLayout);
+                        const taskBarTransform = getTaskBarTransform(
+                            taskDragPreview,
+                            isTaskDragPreviewTarget,
+                        );
                         const canResizeTask = (
                             selectedTaskIds.length <= 1
                             && taskBarVisualLayout.width >= MIN_TASK_BAR_RESIZE_WIDTH_PIXELS
@@ -688,14 +1290,22 @@ export default function TimelineChart(props) {
                         return (
                             <Box
                                 key={bar.task.id}
+                                ref={function setRenderedTaskBarElement(taskBarElement) {
+                                    setTaskBarElement(bar.task.id, taskBarElement);
+                                }}
                                 role="button"
                                 tabIndex={0}
-                                className={getTaskBarClassName(isSelected, isDelayed)}
+                                className={getTaskBarClassName(
+                                    isSelected,
+                                    isDelayed,
+                                    isTaskDragPreviewTarget,
+                                )}
                                 sx={{
                                     left: `${taskBarVisualLayout.left}px`,
                                     top: `${taskBarVisualLayout.top}px`,
                                     width: `${taskBarVisualLayout.width}px`,
                                     backgroundColor: getTaskColor(bar.task),
+                                    transform: taskBarTransform,
                                 }}
                                 onDoubleClick={function openTaskEdit(event) {
                                     event.stopPropagation();
@@ -768,11 +1378,8 @@ export default function TimelineChart(props) {
                     })}
                     {taskHoverBubble && (
                         <Box
+                            ref={setTaskHoverBubbleElement}
                             className="task-hover-bubble"
-                            sx={{
-                                left: `${taskHoverBubble.x}px`,
-                                top: `${taskHoverBubble.y}px`,
-                            }}
                         >
                             <Typography className="task-hover-bubble-title">
                                 {taskHoverBubble.task.name}
@@ -851,7 +1458,7 @@ function getTimelineHeaderCellClassName(isSelectableDayCell, isSelectedDayCell) 
 }
 
 
-function getTaskBarClassName(isSelected, isDelayed) {
+function getTaskBarClassName(isSelected, isDelayed, isTaskDragPreviewTarget) {
     const classNames = ["task-bar"];
 
     if (isSelected) {
@@ -860,6 +1467,10 @@ function getTaskBarClassName(isSelected, isDelayed) {
 
     if (isDelayed) {
         classNames.push("task-bar-delayed");
+    }
+
+    if (isTaskDragPreviewTarget) {
+        classNames.push("task-bar-drag-preview");
     }
 
     return classNames.join(" ");
@@ -960,26 +1571,179 @@ function getDaySegmentLayout(date, gridCells) {
 }
 
 
-function getTodayHighlight(metrics, cell) {
-    if (!isDateInCell(metrics.todayDate, cell)) {
+function getTimelineHeaderLayoutRows(headerRows) {
+    return headerRows.map(function mapTimelineHeaderRow(headerRow) {
+        const cells = getTimelineHeaderCells(headerRow);
+
+        return {
+            cells,
+        };
+    });
+}
+
+
+function getVisibleTimelineHeaderRows(headerLayoutRows, visibleTimelineRange) {
+    return headerLayoutRows.map(function mapVisibleTimelineHeaderRow(headerLayoutRow) {
+        const cells = getVisibleTimelineHeaderCells(
+            headerLayoutRow.cells,
+            visibleTimelineRange,
+        );
+
+        return {
+            cells,
+            gridLines: getTimelineHeaderGridLines(cells),
+        };
+    });
+}
+
+
+function getVisibleTimelineHeaderCells(headerCells, visibleTimelineRange) {
+    return headerCells.filter(function matchVisibleHeaderCell(headerCell) {
+        return (
+            headerCell.right >= visibleTimelineRange.left
+            && headerCell.left <= visibleTimelineRange.right
+        );
+    });
+}
+
+
+function getTimelineHeaderCells(headerRow) {
+    let cellOffset = 0;
+
+    return headerRow.map(function mapTimelineHeaderCell(segment) {
+        const left = getPixelAlignedTimelineOffset(cellOffset);
+
+        cellOffset += segment.width;
+
+        const right = getPixelAlignedTimelineOffset(cellOffset);
+
+        return {
+            ...segment,
+            left,
+            right,
+            width: Math.max(0, right - left),
+        };
+    });
+}
+
+
+function getTimelineHeaderGridLines(headerCells) {
+    return headerCells.map(function mapTimelineHeaderGridLine(cell) {
+        return {
+            key: `header-grid-line-${cell.key}`,
+            left: cell.right,
+        };
+    });
+}
+
+
+function getTimelineBackground(metrics, rowCount) {
+    const bodyHeight = rowCount * metrics.rowHeight;
+    const gridPaths = getTimelineGridPaths(metrics.gridCells, rowCount, metrics.rowHeight);
+
+    return {
+        bodyHeight,
+        horizontalGridPath: gridPaths.horizontalGridPath,
+        verticalGridPath: gridPaths.verticalGridPath,
+        weekendHighlights: getWeekendHighlights(metrics, bodyHeight),
+        todayHighlight: getTodayHighlight(metrics, bodyHeight),
+    };
+}
+
+
+function getTimelineGridPaths(gridCells, rowCount, rowHeight) {
+    const horizontalPathCommands = [];
+    const verticalPathCommands = [];
+    let cellOffset = 0;
+    const timelineHeight = rowCount * rowHeight;
+
+    gridCells.forEach(function mapGridCellToPath(cell) {
+        cellOffset += cell.width;
+
+        const lineLeft = getSvgGridLinePosition(cellOffset);
+        verticalPathCommands.push(`M ${lineLeft} 0 V ${timelineHeight}`);
+    });
+
+    for (let rowIndex = 1; rowIndex <= rowCount; rowIndex += 1) {
+        const lineTop = getSvgGridLinePosition(rowIndex * rowHeight);
+        horizontalPathCommands.push(`M 0 ${lineTop} H ${cellOffset}`);
+    }
+
+    return {
+        horizontalGridPath: horizontalPathCommands.join(" "),
+        verticalGridPath: verticalPathCommands.join(" "),
+    };
+}
+
+
+function getVisibleBodyRowCount(panelHeight, metrics) {
+    const visibleBodyHeight = Math.max(0, panelHeight - metrics.headerHeight);
+
+    return Math.ceil(visibleBodyHeight / metrics.rowHeight);
+}
+
+
+function getVisibleTimelineRange(panel, timelineWidth) {
+    const rawRangeLeft = panel.scrollLeft - TIMELINE_HEADER_OVERSCAN_PIXELS;
+    const rawRangeRight = (
+        panel.scrollLeft
+        + panel.clientWidth
+        + TIMELINE_HEADER_OVERSCAN_PIXELS
+    );
+    const rangeLeft = Math.max(
+        0,
+        Math.floor(rawRangeLeft / TIMELINE_VISIBLE_RANGE_STEP_PIXELS)
+            * TIMELINE_VISIBLE_RANGE_STEP_PIXELS,
+    );
+    const rangeRight = Math.ceil(rawRangeRight / TIMELINE_VISIBLE_RANGE_STEP_PIXELS)
+        * TIMELINE_VISIBLE_RANGE_STEP_PIXELS;
+
+    if (timelineWidth <= 0) {
+        return {
+            left: rangeLeft,
+            right: Math.max(rangeLeft, rangeRight),
+        };
+    }
+
+    const clampedRangeLeft = Math.min(rangeLeft, timelineWidth);
+
+    return {
+        left: clampedRangeLeft,
+        right: Math.max(clampedRangeLeft, Math.min(rangeRight, timelineWidth)),
+    };
+}
+
+
+function hasSameVisibleTimelineRange(currentRange, nextRange) {
+    return currentRange.left === nextRange.left && currentRange.right === nextRange.right;
+}
+
+
+function getTodayHighlight(metrics, height) {
+    const todayLayout = getDaySegmentLayout(metrics.todayDate, metrics.gridCells);
+
+    if (!todayLayout) {
         return null;
     }
 
-    const dayWidth = cell.width / cell.dayCount;
-    const dayOffset = getDateDeltaDays(cell.startDate, metrics.todayDate);
-    const dayLeft = dayOffset * dayWidth;
-
     if (shouldShowTodayColumn(metrics)) {
+        const todaySegmentLayout = getPixelAlignedSegmentLayout(
+            todayLayout.left,
+            todayLayout.width,
+        );
+
         return {
             mode: TODAY_HIGHLIGHT_MODE_COLUMN,
-            left: dayLeft,
-            width: dayWidth,
+            height,
+            left: todaySegmentLayout.left,
+            width: todaySegmentLayout.width,
         };
     }
 
     return {
         mode: TODAY_HIGHLIGHT_MODE_LINE,
-        left: dayLeft + dayWidth / 2,
+        height,
+        left: getSvgTodayLinePosition(todayLayout.left + todayLayout.width / 2),
     };
 }
 
@@ -989,56 +1753,83 @@ function shouldShowTodayColumn(metrics) {
 }
 
 
-function getTodayHighlightClassName(todayHighlight) {
-    if (todayHighlight.mode === TODAY_HIGHLIGHT_MODE_COLUMN) {
-        return "timeline-today-highlight-column";
-    }
-
-    return "timeline-today-highlight-line";
-}
-
-
-function getTodayHighlightStyle(todayHighlight) {
-    const todayHighlightStyle = {
-        left: `${todayHighlight.left}px`,
-    };
-
-    if (todayHighlight.width) {
-        todayHighlightStyle.width = `${todayHighlight.width}px`;
-    }
-
-    return todayHighlightStyle;
-}
-
-
 function isDateInCell(date, cell) {
     return date >= cell.startDate && date <= cell.stopDate;
 }
 
 
-function getWeekendShadowSegments(metrics, cell) {
+function getWeekendHighlights(metrics, height) {
     if (!shouldShowWeekendShadows(metrics)) {
         return [];
     }
 
-    const dayWidth = cell.width / cell.dayCount;
-    const weekendShadowSegments = [];
+    const weekendHighlights = [];
+    let cellOffset = 0;
 
-    for (let dayOffset = 0; dayOffset < cell.dayCount; dayOffset += 1) {
-        const date = addDays(cell.startDate, dayOffset);
+    metrics.gridCells.forEach(function mapGridCellWeekendSegments(cell) {
+        const dayWidth = cell.width / cell.dayCount;
 
-        if (!isWeekendDate(date)) {
-            continue;
+        for (let dayOffset = 0; dayOffset < cell.dayCount; dayOffset += 1) {
+            const date = addDays(cell.startDate, dayOffset);
+
+            if (!isWeekendDate(date)) {
+                continue;
+            }
+
+            const weekendSegmentLayout = getPixelAlignedSegmentLayout(
+                cellOffset + dayOffset * dayWidth,
+                dayWidth,
+            );
+
+            weekendHighlights.push({
+                key: `${cell.key}-${dayOffset}`,
+                height,
+                left: weekendSegmentLayout.left,
+                width: weekendSegmentLayout.width,
+            });
         }
 
-        weekendShadowSegments.push({
-            key: `${cell.key}-${dayOffset}`,
-            left: dayOffset * dayWidth,
-            width: dayWidth,
-        });
+        cellOffset += cell.width;
+    });
+
+    return weekendHighlights;
+}
+
+
+function getPixelAlignedTimelineOffset(offset) {
+    const devicePixelRatio = getDevicePixelRatio();
+
+    return Math.round(offset * devicePixelRatio) / devicePixelRatio;
+}
+
+
+function getPixelAlignedSegmentLayout(left, width) {
+    const alignedLeft = getPixelAlignedTimelineOffset(left);
+    const alignedRight = getPixelAlignedTimelineOffset(left + width);
+
+    return {
+        left: alignedLeft,
+        width: Math.max(0, alignedRight - alignedLeft),
+    };
+}
+
+
+function getSvgGridLinePosition(offset) {
+    return getPixelAlignedTimelineOffset(offset) + TIMELINE_GRID_LINE_WIDTH_PIXELS / 2;
+}
+
+
+function getSvgTodayLinePosition(offset) {
+    return getPixelAlignedTimelineOffset(offset);
+}
+
+
+function getDevicePixelRatio() {
+    if (typeof window === "undefined" || !window.devicePixelRatio) {
+        return 1;
     }
 
-    return weekendShadowSegments;
+    return window.devicePixelRatio;
 }
 
 
@@ -1222,8 +2013,29 @@ function getZoomAnchor(panel, event, gridCells) {
 }
 
 
-function getTaskBarLayout(bar, taskDragPreview) {
-    if (!taskDragPreview || !taskDragPreview.taskIds.includes(bar.task.id)) {
+function getPanelCenterAnchor(panel, gridCells) {
+    const viewportOffset = panel.clientWidth / 2;
+    const timelineOffset = panel.scrollLeft + viewportOffset;
+    const timelineDate = getTimelineDateAtOffset(timelineOffset, gridCells);
+
+    return {
+        ...timelineDate,
+        viewportOffset,
+    };
+}
+
+
+function setTimelinePanelDragging(panel, isDragging) {
+    if (!panel) {
+        return;
+    }
+
+    panel.classList.toggle("timeline-panel-dragging", isDragging);
+}
+
+
+function getTaskBarLayout(bar, taskDragPreview, isTaskDragPreviewTarget) {
+    if (!taskDragPreview || !isTaskDragPreviewTarget) {
         return {
             left: bar.left,
             top: bar.top,
@@ -1236,10 +2048,33 @@ function getTaskBarLayout(bar, taskDragPreview) {
     }
 
     return {
-        left: bar.left + taskDragPreview.pixelDelta,
-        top: bar.top + taskDragPreview.pixelDeltaY,
+        left: bar.left,
+        top: bar.top,
         width: bar.width,
     };
+}
+
+
+function getTaskBarTransform(taskDragPreview, isTaskDragPreviewTarget) {
+    if (
+        !taskDragPreview
+        || !isTaskDragPreviewTarget
+        || taskDragPreview.type !== TASK_DRAG_TYPE_MOVE
+    ) {
+        return undefined;
+    }
+
+    return getTaskBarMoveTransform(taskDragPreview.pixelDelta, taskDragPreview.pixelDeltaY);
+}
+
+
+function getTaskBarMoveTransform(pixelDelta, pixelDeltaY) {
+    return `translate3d(${pixelDelta}px, ${pixelDeltaY}px, 0)`;
+}
+
+
+function getTaskHoverBubbleTransform(x, y) {
+    return `translate3d(${x}px, ${y}px, 0) translateX(-50%)`;
 }
 
 

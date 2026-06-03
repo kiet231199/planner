@@ -18,11 +18,18 @@ import {
     MAX_ZOOM_INDEX,
     MIN_ZOOM_INDEX,
     addDaysToDateString,
+    getTimelineZoomIndexForMode,
+    getTimelineZoomMode,
 } from "./utils/chartScale";
-import { DAY_OFF_ALL_ASSIGNEES } from "./constants/taskOptions";
+import {
+    DAY_OFF_ALL_ASSIGNEES,
+    DEFAULT_TASK_LEVEL,
+    RELEASE_TASK_TYPE,
+} from "./constants/taskOptions";
 
 
 const COLOR_MODE_STORAGE_KEY = "planner-color-mode";
+const TIMELINE_HORIZONTAL_GRID_LINES_STORAGE_KEY = "planner-timeline-horizontal-grid-lines";
 const HISTORY_LIMIT = 30;
 const SAVE_ACTION_THRESHOLD = 10;
 const SAVE_INTERVAL_MILLISECONDS = 60 * 1000;
@@ -30,6 +37,8 @@ const CLIENT_TASK_ID_PREFIX = "task";
 const BUTTON_LABEL_LINE_HEIGHT = 1.2;
 const LIGHT_COLOR_MODE = "light";
 const DARK_COLOR_MODE = "dark";
+const STORED_BOOLEAN_TRUE = "true";
+const STORED_BOOLEAN_FALSE = "false";
 
 const CATPPUCCIN_LATTE = {
     base: "#eff1f5",
@@ -82,6 +91,10 @@ const CATPPUCCIN_MACCHIATO = {
 
 export default function App() {
     const [colorMode, setColorMode] = useState(getInitialColorMode);
+    const [
+        showTimelineHorizontalGridLines,
+        setShowTimelineHorizontalGridLines,
+    ] = useState(getInitialTimelineHorizontalGridLines);
     const [tasks, setTasks] = useState([]);
     const [dayOffs, setDayOffs] = useState([]);
     const [assignees, setAssignees] = useState([]);
@@ -352,6 +365,45 @@ export default function App() {
         return true;
     }
 
+    async function handleUpdateTasks(taskPatch) {
+        const beforeTasks = tasksRef.current;
+        const beforeSelectedTaskIds = selectedTaskIdsRef.current;
+
+        if (beforeSelectedTaskIds.length === 0) {
+            return false;
+        }
+
+        if (Object.keys(taskPatch).length === 0) {
+            setIsDrawerOpen(false);
+            return true;
+        }
+
+        const selectedTaskIdSet = new Set(beforeSelectedTaskIds);
+        const afterTasks = beforeTasks.map(function updateSelectedTask(task) {
+            if (!selectedTaskIdSet.has(task.id)) {
+                return task;
+            }
+
+            return applyBulkTaskPatch(task, taskPatch);
+        });
+
+        if (hasSameTaskList(beforeTasks, afterTasks)) {
+            setIsDrawerOpen(false);
+            return true;
+        }
+
+        commitTaskChange(
+            beforeTasks,
+            afterTasks,
+            beforeSelectedTaskIds,
+            beforeSelectedTaskIds,
+            "Edit tasks",
+        );
+        setIsDrawerOpen(false);
+
+        return true;
+    }
+
     async function handleMoveTasks(taskId, dayDelta, rowDelta) {
         if (dayDelta === 0 && rowDelta === 0) {
             return;
@@ -606,7 +658,7 @@ export default function App() {
     }
 
     function handleEditSelectedTask() {
-        if (selectedTaskIds.length !== 1) {
+        if (selectedTaskIds.length === 0) {
             return;
         }
 
@@ -873,8 +925,28 @@ export default function App() {
     function handleTimelineZoom(zoomDirection) {
         setZoomIndex(function updateZoom(currentZoomIndex) {
             const nextZoomIndex = currentZoomIndex + zoomDirection;
+            const clampedZoomIndex = Math.min(
+                Math.max(nextZoomIndex, MIN_ZOOM_INDEX),
+                MAX_ZOOM_INDEX,
+            );
 
-            return Math.min(Math.max(nextZoomIndex, MIN_ZOOM_INDEX), MAX_ZOOM_INDEX);
+            if (clampedZoomIndex === currentZoomIndex) {
+                return currentZoomIndex;
+            }
+
+            return clampedZoomIndex;
+        });
+    }
+
+    function handleTimelineZoomModeChange(zoomMode) {
+        setZoomIndex(function updateZoomMode(currentZoomIndex) {
+            const nextZoomIndex = getTimelineZoomIndexForMode(currentZoomIndex, zoomMode);
+
+            if (nextZoomIndex === currentZoomIndex) {
+                return currentZoomIndex;
+            }
+
+            return nextZoomIndex;
         });
     }
 
@@ -885,6 +957,13 @@ export default function App() {
 
             return nextColorMode;
         });
+    }
+
+    function handleTimelineHorizontalGridLinesToggle(event) {
+        const nextShowTimelineHorizontalGridLines = event.target.checked;
+
+        saveTimelineHorizontalGridLines(nextShowTimelineHorizontalGridLines);
+        setShowTimelineHorizontalGridLines(nextShowTimelineHorizontalGridLines);
     }
 
     function handleSettingsClick() {
@@ -923,10 +1002,12 @@ export default function App() {
     const selectedTask = tasks.find(function matchSelectedTask(task) {
         return task.id === selectedTaskId;
     }) || null;
-    const canEditSelectedTask = selectedTaskIds.length === 1;
+    const selectedTasks = getTasksByIdsInTaskOrder(tasks, selectedTaskIds);
+    const canEditSelectedTask = selectedTaskIds.length > 0;
     const canCopySelectedTasks = selectedTaskIds.length > 0;
     const canPasteCopiedTasks = copiedTasks.length > 0;
     const selectedDatesHaveDayOff = hasDayOffForSelectedDates(dayOffs, selectedDayOffDates);
+    const zoomMode = getTimelineZoomMode(zoomIndex);
 
     return (
         <ThemeProvider theme={theme}>
@@ -953,13 +1034,19 @@ export default function App() {
                     dayOffDrawerMode={dayOffDrawerMode}
                     dayOffInitialValues={dayOffDrawerInitialValues}
                     colorMode={colorMode}
+                    showTimelineHorizontalGridLines={showTimelineHorizontalGridLines}
                     selectedTask={selectedTask}
+                    selectedTasks={selectedTasks}
                     zoomIndex={zoomIndex}
+                    zoomMode={zoomMode}
                     onAddTaskClick={handleAddTaskClick}
                     onCreateDayOffs={handleCreateDayOffs}
                     onDayOffActionClick={handleDayOffActionClick}
                     onDayOffDrawerClose={handleDayOffDrawerClose}
                     onSaveAssignees={handleSaveAssignees}
+                    onTimelineHorizontalGridLinesToggle={
+                        handleTimelineHorizontalGridLinesToggle
+                    }
                     onDrawerClose={function closeDrawer() {
                         setIsDrawerOpen(false);
                     }}
@@ -990,7 +1077,9 @@ export default function App() {
                     onSelectDayOffDate={handleSelectDayOffDate}
                     onUndoTaskChange={handleUndoTaskChange}
                     onUpdateTask={handleUpdateTask}
+                    onUpdateTasks={handleUpdateTasks}
                     onTimelineZoom={handleTimelineZoom}
+                    onTimelineZoomModeChange={handleTimelineZoomModeChange}
                     onColorModeToggle={handleColorModeToggle}
                     onSettingsClick={handleSettingsClick}
                     selectedDatesHaveDayOff={selectedDatesHaveDayOff}
@@ -1092,6 +1181,17 @@ function getInitialColorMode() {
 }
 
 
+function getInitialTimelineHorizontalGridLines() {
+    const storedTimelineHorizontalGridLines = readStoredTimelineHorizontalGridLines();
+
+    if (storedTimelineHorizontalGridLines === null) {
+        return true;
+    }
+
+    return storedTimelineHorizontalGridLines;
+}
+
+
 function readStoredColorMode() {
     try {
         const storedColorMode = window.localStorage.getItem(COLOR_MODE_STORAGE_KEY);
@@ -1107,9 +1207,43 @@ function readStoredColorMode() {
 }
 
 
+function readStoredTimelineHorizontalGridLines() {
+    try {
+        const storedValue = window.localStorage.getItem(
+            TIMELINE_HORIZONTAL_GRID_LINES_STORAGE_KEY,
+        );
+
+        if (storedValue === STORED_BOOLEAN_TRUE) {
+            return true;
+        }
+
+        if (storedValue === STORED_BOOLEAN_FALSE) {
+            return false;
+        }
+    } catch {
+        return null;
+    }
+
+    return null;
+}
+
+
 function saveColorMode(colorMode) {
     try {
         window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, colorMode);
+    } catch {
+        return;
+    }
+}
+
+
+function saveTimelineHorizontalGridLines(showTimelineHorizontalGridLines) {
+    try {
+        const storedValue = showTimelineHorizontalGridLines
+            ? STORED_BOOLEAN_TRUE
+            : STORED_BOOLEAN_FALSE;
+
+        window.localStorage.setItem(TIMELINE_HORIZONTAL_GRID_LINES_STORAGE_KEY, storedValue);
     } catch {
         return;
     }
@@ -1634,6 +1768,39 @@ function replaceTaskById(tasks, updatedTask) {
 
         return task;
     });
+}
+
+
+function applyBulkTaskPatch(task, taskPatch) {
+    const nextTaskType = taskPatch.taskType || task.taskType;
+    const updatedTask = {
+        ...task,
+    };
+
+    Object.entries(taskPatch).forEach(function applyTaskPatchField([fieldName, fieldValue]) {
+        if (nextTaskType === RELEASE_TASK_TYPE && fieldName === "stopDate") {
+            return;
+        }
+
+        if (nextTaskType === RELEASE_TASK_TYPE && fieldName === "progressPercent") {
+            return;
+        }
+
+        if (nextTaskType === RELEASE_TASK_TYPE && fieldName === "taskLevel") {
+            return;
+        }
+
+        updatedTask[fieldName] = fieldValue;
+    });
+
+    if (nextTaskType === RELEASE_TASK_TYPE) {
+        updatedTask.taskType = RELEASE_TASK_TYPE;
+        updatedTask.taskLevel = DEFAULT_TASK_LEVEL;
+        updatedTask.stopDate = updatedTask.startDate;
+        updatedTask.progressPercent = 100;
+    }
+
+    return updatedTask;
 }
 
 

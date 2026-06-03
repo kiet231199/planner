@@ -12,7 +12,16 @@ import RedoIcon from "@mui/icons-material/Redo";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import TodayOutlinedIcon from "@mui/icons-material/TodayOutlined";
 import UndoIcon from "@mui/icons-material/Undo";
-import { Box, Button, IconButton, Tooltip } from "@mui/material";
+import {
+    Box,
+    Button,
+    IconButton,
+    ToggleButton,
+    ToggleButtonGroup,
+    Tooltip,
+} from "@mui/material";
+
+import { TIMELINE_ZOOM_MODES } from "../utils/chartScale";
 
 
 export default function TaskToolbar(props) {
@@ -38,13 +47,23 @@ export default function TaskToolbar(props) {
         onScrollTimelineFuture,
         onScrollTimelinePast,
         onScrollTimelineToday,
+        onTimelineZoomModeChange,
         onTaskListCollapseToggle,
         onUndoTaskChange,
         selectedDatesHaveDayOff,
+        zoomMode,
     } = props;
     const dayOffButtonLabel = selectedDatesHaveDayOff ? "Remove Day-off" : "Add Day-off";
     const DayOffButtonIcon = selectedDatesHaveDayOff ? EventBusyIcon : EventAvailableIcon;
     const taskListCollapseButtonLabel = getTaskListCollapseButtonLabel(isTaskListCollapsed);
+
+    function handleZoomModeChange(_, nextZoomMode) {
+        if (!nextZoomMode) {
+            return;
+        }
+
+        onTimelineZoomModeChange(nextZoomMode);
+    }
 
     return (
         <>
@@ -139,6 +158,28 @@ export default function TaskToolbar(props) {
                     </Button>
                 </Box>
                 <Box className="toolbar-timeline-navigation" aria-label="Timeline navigation">
+                    <ToggleButtonGroup
+                        className="toolbar-zoom-mode-group"
+                        size="small"
+                        color="primary"
+                        exclusive
+                        value={zoomMode}
+                        aria-label="Timeline zoom mode"
+                        onChange={handleZoomModeChange}
+                    >
+                        {TIMELINE_ZOOM_MODES.map(function renderZoomModeButton(zoomModeOption) {
+                            return (
+                                <ToggleButton
+                                    key={zoomModeOption.value}
+                                    className="toolbar-zoom-mode-button"
+                                    value={zoomModeOption.value}
+                                    aria-label={`${zoomModeOption.label} mode`}
+                                >
+                                    {zoomModeOption.label}
+                                </ToggleButton>
+                            );
+                        })}
+                    </ToggleButtonGroup>
                     <Tooltip title="Move timeline to the past">
                         <IconButton
                             className="toolbar-timeline-icon-button"

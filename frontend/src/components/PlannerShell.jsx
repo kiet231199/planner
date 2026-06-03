@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, LinearProgress } from "@mui/material";
 
 import DayOffDrawer from "./DayOffDrawer";
@@ -7,13 +7,25 @@ import TaskDrawer from "./TaskDrawer";
 import TaskList from "./TaskList";
 import TaskToolbar from "./TaskToolbar";
 import TimelineChart from "./TimelineChart";
-import { getTimelineHeaderHeight, getTimelineMetrics } from "../utils/chartScale";
+import {
+    getTimelineDateAtOffset,
+    getTimelineHeaderHeight,
+    getTimelineOffsetForDate,
+    getTimelineScaleMetrics,
+} from "../utils/chartScale";
 
 
 const TASK_LIST_WIDTH_STORAGE_KEY = "planner-task-list-width";
 const DEFAULT_TASK_LIST_WIDTH_PIXELS = 280;
 const MIN_TASK_LIST_WIDTH_PIXELS = 260;
 const MAX_TASK_LIST_WIDTH_PIXELS = 560;
+const COMPACT_LAYOUT_MAX_WIDTH_PIXELS = 900;
+const SHORT_VIEWPORT_MAX_HEIGHT_PIXELS = 560;
+const TOOLBAR_PANEL_WIDTH_PIXELS = 56;
+const MIN_TIMELINE_WIDTH_PIXELS = 360;
+const COMPACT_TASK_LIST_WIDTH_PIXELS = 240;
+const COMPACT_MIN_TASK_LIST_WIDTH_PIXELS = 180;
+const COMPACT_MIN_TIMELINE_WIDTH_PIXELS = 240;
 const DRAG_MOUSE_BUTTON = 0;
 const SCROLL_SYNC_TOLERANCE_PIXELS = 1;
 const TIMELINE_SCROLL_BEHAVIOR = "smooth";
@@ -26,6 +38,10 @@ const ASSIGNEE_COLLATOR = new Intl.Collator(undefined, {
     numeric: true,
     sensitivity: "base",
 });
+const EMPTY_SHELL_SIZE = {
+    width: 0,
+    height: 0,
+};
 
 
 export default function PlannerShell(props) {
@@ -37,6 +53,7 @@ export default function PlannerShell(props) {
         selectedTaskIds,
         selectedDayOffDates,
         selectedTask,
+        selectedTasks,
         isDrawerOpen,
         isDayOffDrawerOpen,
         isSettingsDrawerOpen,
@@ -52,7 +69,9 @@ export default function PlannerShell(props) {
         dayOffDrawerMode,
         dayOffInitialValues,
         colorMode,
+        showTimelineHorizontalGridLines,
         zoomIndex,
+        zoomMode,
         onAddTaskClick,
         onCreateDayOffs,
         onDayOffActionClick,
@@ -78,19 +97,28 @@ export default function PlannerShell(props) {
         onSettingsDrawerClose,
         onUndoTaskChange,
         onUpdateTask,
+        onUpdateTasks,
+        onTimelineHorizontalGridLinesToggle,
         onTimelineZoom,
+        onTimelineZoomModeChange,
         selectedDatesHaveDayOff,
     } = props;
 
     const [taskListWidth, setTaskListWidth] = useState(getInitialTaskListWidth);
     const [isTaskListCollapsed, setIsTaskListCollapsed] = useState(false);
+    const [isCompactTaskListCollapsed, setIsCompactTaskListCollapsed] = useState(true);
+    const [shellSize, setShellSize] = useState(getInitialShellSize);
     const [selectedAssigneeFilters, setSelectedAssigneeFilters] = useState([]);
     const [assigneeSortDirection, setAssigneeSortDirection] = useState(ASSIGNEE_SORT_NONE);
     const [highlightedTaskId, setHighlightedTaskId] = useState(null);
     const isSyncingScrollRef = useRef(false);
+    const shellRef = useRef(null);
+    const shellResizeFrameIdRef = useRef(null);
     const taskListPanelRef = useRef(null);
     const taskListResizeStateRef = useRef(null);
+    const timelineModeZoomAnchorRef = useRef(null);
     const timelinePanelRef = useRef(null);
+    const wasCompactLayoutRef = useRef(false);
     const timelineHeaderHeight = getTimelineHeaderHeight(zoomIndex);
     const assigneeFilterOptions = useMemo(function memoizeAssigneeFilterOptions() {
         return getAssigneeFilterOptions(tasks);
@@ -102,7 +130,103 @@ export default function PlannerShell(props) {
         selectedAssigneeFilters.length > 0
         || assigneeSortDirection !== ASSIGNEE_SORT_NONE
     );
-    const taskListColumnWidth = getTaskListColumnWidth(taskListWidth, isTaskListCollapsed);
+    const isCompactLayout = isCompactPlannerLayout(shellSize.width);
+    const isShortViewport = isShortPlannerViewport(shellSize.height);
+    const isEffectiveTaskListCollapsed = getEffectiveTaskListCollapsed(
+        isTaskListCollapsed,
+        isCompactTaskListCollapsed,
+        isCompactLayout,
+    );
+    const plannerShellClassName = getPlannerShellClassName(isCompactLayout, isShortViewport);
+    const taskListColumnWidth = getTaskListColumnWidth(
+        taskListWidth,
+        isEffectiveTaskListCollapsed,
+        isCompactLayout,
+        shellSize.width,
+    );
+
+    useLayoutEffect(function trackPlannerShellSize() {
+        const shell = shellRef.current;
+
+        if (!shell) {
+            return undefined;
+        }
+
+        function updateShellSize() {
+            shellResizeFrameIdRef.current = null;
+
+            const shellRect = shell.getBoundingClientRect();
+            const nextShellSize = {
+                width: Math.round(shellRect.width),
+                height: Math.round(shellRect.height),
+            };
+
+            setShellSize(function updateMeasuredShellSize(currentShellSize) {
+                if (hasSameShellSize(currentShellSize, nextShellSize)) {
+                    return currentShellSize;
+                }
+
+                return nextShellSize;
+            });
+        }
+
+        function scheduleShellSizeUpdate() {
+            if (shellResizeFrameIdRef.current !== null) {
+                return;
+            }
+
+            shellResizeFrameIdRef.current = window.requestAnimationFrame(updateShellSize);
+        }
+
+        scheduleShellSizeUpdate();
+
+        if (typeof ResizeObserver === "undefined") {
+            window.addEventListener("resize", scheduleShellSizeUpdate);
+
+            return function removeWindowResizeListener() {
+                window.removeEventListener("resize", scheduleShellSizeUpdate);
+                cancelShellResizeFrame(shellResizeFrameIdRef);
+            };
+        }
+
+        const resizeObserver = new ResizeObserver(scheduleShellSizeUpdate);
+        resizeObserver.observe(shell);
+
+        return function disconnectResizeObserver() {
+            resizeObserver.disconnect();
+            cancelShellResizeFrame(shellResizeFrameIdRef);
+        };
+    }, []);
+
+    useEffect(function collapseTaskListWhenCompactLayoutStarts() {
+        if (isCompactLayout && !wasCompactLayoutRef.current) {
+            setIsCompactTaskListCollapsed(true);
+            taskListResizeStateRef.current = null;
+            document.body.classList.remove("task-list-resizing");
+            handleClearTaskHighlight();
+        }
+
+        wasCompactLayoutRef.current = isCompactLayout;
+    }, [isCompactLayout]);
+
+    useLayoutEffect(function alignModeZoomAnchor() {
+        const panel = timelinePanelRef.current;
+        const anchor = timelineModeZoomAnchorRef.current;
+
+        if (!panel || !anchor) {
+            return;
+        }
+
+        const metrics = getTimelineScaleMetrics(displayedTasks, zoomIndex, panel.clientWidth);
+        const anchorOffset = getTimelineOffsetForDate(
+            anchor.date,
+            anchor.dayRatio,
+            metrics.gridCells,
+        );
+
+        panel.scrollLeft = anchorOffset - anchor.viewportOffset;
+        timelineModeZoomAnchorRef.current = null;
+    }, [displayedTasks, zoomIndex]);
 
     useEffect(function bindTaskListResizeListeners() {
         function handleMouseMove(event) {
@@ -142,7 +266,7 @@ export default function PlannerShell(props) {
     }, []);
 
     function handleTaskListResizeStart(event) {
-        if (isTaskListCollapsed) {
+        if (isCompactLayout || isEffectiveTaskListCollapsed) {
             return;
         }
 
@@ -175,7 +299,7 @@ export default function PlannerShell(props) {
             return;
         }
 
-        const metrics = getTimelineMetrics(displayedTasks, zoomIndex, panel.clientWidth);
+        const metrics = getTimelineScaleMetrics(displayedTasks, zoomIndex, panel.clientWidth);
         const centeredTodayScrollLeft = getCenteredTodayScrollLeft(panel, metrics);
 
         scrollTimelineTo(panel, centeredTodayScrollLeft);
@@ -191,6 +315,18 @@ export default function PlannerShell(props) {
         scrollTimelineTo(panel, panel.scrollLeft + direction * panel.clientWidth);
     }
 
+    function handleTimelineZoomModeChange(zoomMode) {
+        const panel = timelinePanelRef.current;
+
+        if (panel) {
+            const metrics = getTimelineScaleMetrics(displayedTasks, zoomIndex, panel.clientWidth);
+
+            timelineModeZoomAnchorRef.current = getPanelCenterAnchor(panel, metrics);
+        }
+
+        onTimelineZoomModeChange(zoomMode);
+    }
+
     function handleTaskHighlight(taskId) {
         setHighlightedTaskId(taskId);
     }
@@ -200,9 +336,13 @@ export default function PlannerShell(props) {
     }
 
     function handleTaskListCollapseToggle() {
-        const nextIsTaskListCollapsed = !isTaskListCollapsed;
+        const nextIsTaskListCollapsed = !isEffectiveTaskListCollapsed;
 
-        setIsTaskListCollapsed(nextIsTaskListCollapsed);
+        if (isCompactLayout) {
+            setIsCompactTaskListCollapsed(nextIsTaskListCollapsed);
+        } else {
+            setIsTaskListCollapsed(nextIsTaskListCollapsed);
+        }
 
         if (nextIsTaskListCollapsed) {
             taskListResizeStateRef.current = null;
@@ -270,17 +410,18 @@ export default function PlannerShell(props) {
     const timelineHighlightedTaskId = highlightedTaskId;
 
     return (
-        <Box className="planner-shell">
+        <Box ref={shellRef} className={plannerShellClassName}>
             <TaskToolbar
                 hasSelectedTask={Boolean(selectedTaskId)}
                 hasSelectedDayOffDates={selectedDayOffDates.length > 0}
-                isTaskListCollapsed={isTaskListCollapsed}
+                isTaskListCollapsed={isEffectiveTaskListCollapsed}
                 canEditSelectedTask={canEditSelectedTask}
                 canCopySelectedTasks={canCopySelectedTasks}
                 canPasteCopiedTasks={canPasteCopiedTasks}
                 canRedo={canRedo}
                 canUndo={canUndo}
                 isSaving={isSaving}
+                zoomMode={zoomMode}
                 onAddTaskClick={onAddTaskClick}
                 onCopySelectedTasks={onCopySelectedTasks}
                 onDayOffActionClick={onDayOffActionClick}
@@ -293,13 +434,14 @@ export default function PlannerShell(props) {
                 onScrollTimelineFuture={handleScrollTimelineFuture}
                 onScrollTimelinePast={handleScrollTimelinePast}
                 onScrollTimelineToday={handleScrollTimelineToday}
+                onTimelineZoomModeChange={handleTimelineZoomModeChange}
                 onTaskListCollapseToggle={handleTaskListCollapseToggle}
                 onUndoTaskChange={onUndoTaskChange}
                 selectedDatesHaveDayOff={selectedDatesHaveDayOff}
             />
             {isLoading && <LinearProgress className="planner-progress" />}
             <Box
-                className={getPlannerContentClassName(isTaskListCollapsed)}
+                className={getPlannerContentClassName(isEffectiveTaskListCollapsed)}
                 sx={{
                     gridTemplateColumns: `${taskListColumnWidth}px minmax(0, 1fr)`,
                     "--planner-task-list-boundary": `${taskListColumnWidth}px`,
@@ -313,7 +455,7 @@ export default function PlannerShell(props) {
                     assigneeFilterOptions={assigneeFilterOptions}
                     assigneeSortDirection={assigneeSortDirection}
                     highlightedTaskId={taskListHighlightedTaskId}
-                    isCollapsed={isTaskListCollapsed}
+                    isCollapsed={isEffectiveTaskListCollapsed}
                     selectedAssigneeFilters={selectedAssigneeFilters}
                     selectedTaskIds={selectedTaskIds}
                     headerHeight={timelineHeaderHeight}
@@ -336,6 +478,7 @@ export default function PlannerShell(props) {
                     isRowReorderDisabled={isTaskViewFilteredOrSorted}
                     selectedDayOffDates={selectedDayOffDates}
                     selectedTaskIds={selectedTaskIds}
+                    showTimelineHorizontalGridLines={showTimelineHorizontalGridLines}
                     zoomIndex={zoomIndex}
                     onClearHighlight={handleClearTaskHighlight}
                     onClearSelection={onClearSelection}
@@ -357,16 +500,20 @@ export default function PlannerShell(props) {
                 isAssigneeSaving={isAssigneeSaving}
                 mode={drawerMode}
                 task={selectedTask}
+                tasks={selectedTasks}
                 onClose={onDrawerClose}
                 onCreateTask={onCreateTask}
                 onSaveAssignees={onSaveAssignees}
                 onUpdateTask={onUpdateTask}
+                onUpdateTasks={onUpdateTasks}
             />
             <SettingsDrawer
                 open={isSettingsDrawerOpen}
                 colorMode={colorMode}
+                showTimelineHorizontalGridLines={showTimelineHorizontalGridLines}
                 onClose={onSettingsDrawerClose}
                 onColorModeToggle={onColorModeToggle}
+                onTimelineHorizontalGridLinesToggle={onTimelineHorizontalGridLinesToggle}
             />
             <DayOffDrawer
                 open={isDayOffDrawerOpen}
@@ -395,6 +542,18 @@ function getCenteredTodayScrollLeft(panel, metrics) {
 }
 
 
+function getPanelCenterAnchor(panel, metrics) {
+    const viewportOffset = panel.clientWidth / 2;
+    const timelineOffset = panel.scrollLeft + viewportOffset;
+    const timelineDate = getTimelineDateAtOffset(timelineOffset, metrics.gridCells);
+
+    return {
+        ...timelineDate,
+        viewportOffset,
+    };
+}
+
+
 function scrollTimelineTo(panel, scrollLeft) {
     const maxScrollLeft = Math.max(0, panel.scrollWidth - panel.clientWidth);
     const clampedScrollLeft = Math.min(Math.max(scrollLeft, 0), maxScrollLeft);
@@ -406,12 +565,117 @@ function scrollTimelineTo(panel, scrollLeft) {
 }
 
 
-function getTaskListColumnWidth(taskListWidth, isTaskListCollapsed) {
+function getPlannerShellClassName(isCompactLayout, isShortViewport) {
+    const classNames = ["planner-shell"];
+
+    if (isCompactLayout) {
+        classNames.push("planner-shell-compact");
+    }
+
+    if (isShortViewport) {
+        classNames.push("planner-shell-short");
+    }
+
+    return classNames.join(" ");
+}
+
+
+function isCompactPlannerLayout(shellWidth) {
+    return shellWidth > 0 && shellWidth < COMPACT_LAYOUT_MAX_WIDTH_PIXELS;
+}
+
+
+function isShortPlannerViewport(shellHeight) {
+    return shellHeight > 0 && shellHeight < SHORT_VIEWPORT_MAX_HEIGHT_PIXELS;
+}
+
+
+function getEffectiveTaskListCollapsed(
+    isTaskListCollapsed,
+    isCompactTaskListCollapsed,
+    isCompactLayout,
+) {
+    if (isCompactLayout) {
+        return isCompactTaskListCollapsed;
+    }
+
+    return isTaskListCollapsed;
+}
+
+
+function hasSameShellSize(currentShellSize, nextShellSize) {
+    return (
+        currentShellSize.width === nextShellSize.width
+        && currentShellSize.height === nextShellSize.height
+    );
+}
+
+
+function cancelShellResizeFrame(shellResizeFrameIdRef) {
+    if (shellResizeFrameIdRef.current === null) {
+        return;
+    }
+
+    window.cancelAnimationFrame(shellResizeFrameIdRef.current);
+    shellResizeFrameIdRef.current = null;
+}
+
+
+function getTaskListColumnWidth(
+    taskListWidth,
+    isTaskListCollapsed,
+    isCompactLayout,
+    shellWidth,
+) {
     if (isTaskListCollapsed) {
         return 0;
     }
 
-    return taskListWidth;
+    if (isCompactLayout) {
+        return getCompactTaskListWidth(shellWidth);
+    }
+
+    return getDesktopTaskListWidth(taskListWidth, shellWidth);
+}
+
+
+function getDesktopTaskListWidth(taskListWidth, shellWidth) {
+    const clampedTaskListWidth = getClampedTaskListWidth(taskListWidth);
+
+    if (shellWidth <= 0) {
+        return clampedTaskListWidth;
+    }
+
+    const availableContentWidth = getAvailablePlannerContentWidth(shellWidth);
+    const maximumResponsiveTaskListWidth = Math.max(
+        MIN_TASK_LIST_WIDTH_PIXELS,
+        Math.min(
+            MAX_TASK_LIST_WIDTH_PIXELS,
+            availableContentWidth - MIN_TIMELINE_WIDTH_PIXELS,
+        ),
+    );
+
+    return Math.min(clampedTaskListWidth, maximumResponsiveTaskListWidth);
+}
+
+
+function getCompactTaskListWidth(shellWidth) {
+    if (shellWidth <= 0) {
+        return COMPACT_TASK_LIST_WIDTH_PIXELS;
+    }
+
+    const availableContentWidth = getAvailablePlannerContentWidth(shellWidth);
+    const maximumCompactTaskListWidth = Math.max(
+        COMPACT_MIN_TASK_LIST_WIDTH_PIXELS,
+        availableContentWidth - COMPACT_MIN_TIMELINE_WIDTH_PIXELS,
+    );
+
+    return Math.min(COMPACT_TASK_LIST_WIDTH_PIXELS, maximumCompactTaskListWidth);
+}
+
+
+function getAvailablePlannerContentWidth(shellWidth) {
+    return Math.max(0, shellWidth - TOOLBAR_PANEL_WIDTH_PIXELS);
 }
 
 
@@ -527,6 +791,18 @@ function getInitialTaskListWidth() {
     }
 
     return DEFAULT_TASK_LIST_WIDTH_PIXELS;
+}
+
+
+function getInitialShellSize() {
+    if (typeof window === "undefined") {
+        return EMPTY_SHELL_SIZE;
+    }
+
+    return {
+        width: window.innerWidth,
+        height: window.innerHeight,
+    };
 }
 
 

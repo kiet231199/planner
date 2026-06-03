@@ -36,11 +36,34 @@ const DAY_MODE_WIDTH_STEP_PIXELS = 1;
 const WEEK_MODE_WIDTH_STEP_PIXELS = 4;
 const MONTH_MODE_WIDTH_STEP_PIXELS = 4;
 const YEAR_MODE_WIDTH_STEP_PIXELS = 8;
+const TIMELINE_SCALE_CACHE_LIMIT = 24;
+const EMPTY_TASK_RANGE_SIGNATURE = "empty";
+const TIMELINE_SCALE_CACHE_KEY_SEPARATOR = "|";
+
+const timelineScaleCache = new Map();
 
 export const ZOOM_LEVELS = buildZoomLevels();
 export const DEFAULT_ZOOM_INDEX = getDefaultZoomIndex();
 export const MAX_ZOOM_INDEX = ZOOM_LEVELS.length - 1;
 export const MIN_ZOOM_INDEX = 0;
+export const TIMELINE_ZOOM_MODES = [
+    {
+        value: "day",
+        label: "Day",
+    },
+    {
+        value: "week",
+        label: "Week",
+    },
+    {
+        value: "month",
+        label: "Month",
+    },
+    {
+        value: "year",
+        label: "Year",
+    },
+];
 
 
 export function getTimelineMetrics(
@@ -48,6 +71,47 @@ export function getTimelineMetrics(
     zoomIndex,
     minimumTimelineWidth = NO_MINIMUM_TIMELINE_WIDTH,
 ) {
+    const scaleMetrics = getTimelineScaleMetrics(tasks, zoomIndex, minimumTimelineWidth);
+
+    return {
+        ...scaleMetrics,
+        bars: getTimelineTaskBars(tasks, scaleMetrics.gridCells),
+    };
+}
+
+
+export function getTimelineScaleMetrics(
+    tasks,
+    zoomIndex,
+    minimumTimelineWidth = NO_MINIMUM_TIMELINE_WIDTH,
+) {
+    const cacheKey = getTimelineScaleCacheKey(tasks, zoomIndex, minimumTimelineWidth);
+    const cachedMetrics = timelineScaleCache.get(cacheKey);
+
+    if (cachedMetrics) {
+        timelineScaleCache.delete(cacheKey);
+        timelineScaleCache.set(cacheKey, cachedMetrics);
+
+        return cachedMetrics;
+    }
+
+    const metrics = createTimelineScaleMetrics(tasks, zoomIndex, minimumTimelineWidth);
+
+    timelineScaleCache.set(cacheKey, metrics);
+    trimTimelineScaleCache();
+
+    return metrics;
+}
+
+
+export function getTimelineTaskBars(tasks, gridCells) {
+    return tasks.map(function mapTaskToBar(task, index) {
+        return createTaskBar(task, index, gridCells);
+    });
+}
+
+
+function createTimelineScaleMetrics(tasks, zoomIndex, minimumTimelineWidth) {
     const zoomLevel = ZOOM_LEVELS[zoomIndex] || ZOOM_LEVELS[DEFAULT_ZOOM_INDEX];
     const visibleRange = getGeneratedRange(tasks, zoomLevel, minimumTimelineWidth);
     const totalDays = getInclusiveDayCount(visibleRange.startDate, visibleRange.stopDate);
@@ -72,9 +136,6 @@ export function getTimelineMetrics(
         dayWidth: todayDayWidth,
         todayScrollLeft,
         zoomLabel: zoomLevel.label,
-        bars: tasks.map(function mapTaskToBar(task, index) {
-            return createTaskBar(task, index, gridCells);
-        }),
     };
 }
 
@@ -86,6 +147,50 @@ export function getDurationDays(task) {
 
 export function getTimelineHeaderHeight() {
     return TIMELINE_HEADER_HEIGHT_PIXELS;
+}
+
+
+export function getTimelineZoomMode(zoomIndex) {
+    return getZoomLevel(zoomIndex).headerMode;
+}
+
+
+export function getTimelineZoomIndexForMode(zoomIndex, zoomMode) {
+    const currentZoomLevel = getZoomLevel(zoomIndex);
+    const matchingZoomLevels = ZOOM_LEVELS
+        .map(function mapZoomLevelWithIndex(zoomLevel, index) {
+            return {
+                index,
+                zoomLevel,
+            };
+        })
+        .filter(function matchZoomMode(indexedZoomLevel) {
+            return indexedZoomLevel.zoomLevel.headerMode === zoomMode;
+        });
+
+    if (matchingZoomLevels.length === 0) {
+        return zoomIndex;
+    }
+
+    const closestZoomLevel = matchingZoomLevels.reduce(function findClosestZoomLevel(
+        closestMatch,
+        indexedZoomLevel,
+    ) {
+        const closestWidthDelta = Math.abs(
+            closestMatch.zoomLevel.unitWidth - currentZoomLevel.unitWidth,
+        );
+        const currentWidthDelta = Math.abs(
+            indexedZoomLevel.zoomLevel.unitWidth - currentZoomLevel.unitWidth,
+        );
+
+        if (currentWidthDelta < closestWidthDelta) {
+            return indexedZoomLevel;
+        }
+
+        return closestMatch;
+    });
+
+    return closestZoomLevel.index;
 }
 
 
@@ -129,6 +234,60 @@ export function addDaysToDateString(value, daysToAdd) {
 
 export function getDateDeltaDays(startDate, stopDate) {
     return getDayOffset(startDate, stopDate);
+}
+
+
+function getZoomLevel(zoomIndex) {
+    return ZOOM_LEVELS[zoomIndex] || ZOOM_LEVELS[DEFAULT_ZOOM_INDEX];
+}
+
+
+function getTimelineScaleCacheKey(tasks, zoomIndex, minimumTimelineWidth) {
+    const todaySignature = formatDate(normalizeDate(new Date()));
+    const normalizedMinimumWidth = Math.round(minimumTimelineWidth);
+    const taskRangeSignature = getTaskRangeSignature(tasks);
+
+    return [
+        todaySignature,
+        zoomIndex,
+        normalizedMinimumWidth,
+        taskRangeSignature,
+    ].join(TIMELINE_SCALE_CACHE_KEY_SEPARATOR);
+}
+
+
+function getTaskRangeSignature(tasks) {
+    if (tasks.length === 0) {
+        return EMPTY_TASK_RANGE_SIGNATURE;
+    }
+
+    let earliestTaskStartTime = Infinity;
+    let latestTaskStopTime = -Infinity;
+
+    tasks.forEach(function readTaskRange(task) {
+        earliestTaskStartTime = Math.min(
+            earliestTaskStartTime,
+            parseDate(task.startDate).getTime(),
+        );
+        latestTaskStopTime = Math.max(
+            latestTaskStopTime,
+            parseDate(task.stopDate).getTime(),
+        );
+    });
+
+    return [
+        earliestTaskStartTime,
+        latestTaskStopTime,
+    ].join(TIMELINE_SCALE_CACHE_KEY_SEPARATOR);
+}
+
+
+function trimTimelineScaleCache() {
+    while (timelineScaleCache.size > TIMELINE_SCALE_CACHE_LIMIT) {
+        const oldestCacheKey = timelineScaleCache.keys().next().value;
+
+        timelineScaleCache.delete(oldestCacheKey);
+    }
 }
 
 

@@ -36,6 +36,9 @@ const DEFAULT_FORM_VALUES = {
     stopDate: "",
     progressPercent: 0,
 };
+const FORM_FIELD_NAMES = Object.keys(DEFAULT_FORM_VALUES);
+const MIXED_TEXT_VALUE = "...";
+const MIXED_SELECT_VALUE = "__mixed__";
 const PROGRESS_SLIDER_STEP = 5;
 const PROGRESS_SLIDER_MARKS = [
     {
@@ -56,6 +59,7 @@ const PROGRESS_SLIDER_MARKS = [
 export default function TaskForm(props) {
     const {
         initialTask,
+        initialTasks = [],
         isSaving,
         assignees = [],
         isAssigneeSaving,
@@ -63,18 +67,39 @@ export default function TaskForm(props) {
         onSaveAssignees,
         onSubmitTask,
     } = props;
+    const editTasks = getEditTasks(initialTask, initialTasks);
+    const isEditMode = editTasks.length > 0;
+    const isBulkEditMode = editTasks.length > 1;
     const [formValues, setFormValues] = useState(function getInitialState() {
-        return getInitialFormValues(initialTask);
+        return getInitialFormValuesForMode(initialTask, editTasks);
     });
     const [formErrors, setFormErrors] = useState({});
+    const [mixedFields] = useState(function getInitialMixedState() {
+        return getMixedFieldSet(editTasks);
+    });
+    const [dirtyFields, setDirtyFields] = useState(function getInitialDirtyFieldState() {
+        return new Set();
+    });
     const [isAssigneeManagerOpen, setIsAssigneeManagerOpen] = useState(false);
     const assigneeOptions = useMemo(function memoizeAssigneeOptions() {
         return getAssigneeOptions(assignees);
     }, [assignees]);
     const isReleaseTask = formValues.taskType === RELEASE_TASK_TYPE;
+    const shouldShowDateRangeFields = shouldShowTaskDateRangeFields(
+        isBulkEditMode,
+        isReleaseTask,
+    );
+    const shouldShowTaskLevelField = shouldShowTaskLevelSelect(
+        isBulkEditMode,
+        isReleaseTask,
+    );
 
     useEffect(function keepSelectedAssigneeSupported() {
         setFormValues(function updateUnsupportedAssignee(currentValues) {
+            if (currentValues.assignee === MIXED_SELECT_VALUE) {
+                return currentValues;
+            }
+
             if (assigneeOptions.includes(currentValues.assignee)) {
                 return currentValues;
             }
@@ -90,12 +115,18 @@ export default function TaskForm(props) {
         const { name, value } = event.target;
 
         if (name === "taskType") {
+            markFieldDirty(name);
             handleTaskTypeChange(value);
             return;
         }
 
+        markFieldDirty(name);
         setFormValues(function updateFormValues(currentValues) {
-            if (name === "startDate" && currentValues.taskType === RELEASE_TASK_TYPE) {
+            if (
+                name === "startDate"
+                && currentValues.taskType === RELEASE_TASK_TYPE
+                && !shouldShowDateRangeFields
+            ) {
                 return {
                     ...currentValues,
                     startDate: value,
@@ -124,6 +155,7 @@ export default function TaskForm(props) {
             return {
                 ...currentValues,
                 taskType,
+                taskLevel: DEFAULT_TASK_LEVEL,
                 startDate: releaseDate,
                 stopDate: releaseDate,
                 progressPercent: 100,
@@ -132,6 +164,7 @@ export default function TaskForm(props) {
     }
 
     function handleProgressChange(_, value) {
+        markFieldDirty("progressPercent");
         setFormValues(function updateFormValues(currentValues) {
             return {
                 ...currentValues,
@@ -140,17 +173,45 @@ export default function TaskForm(props) {
         });
     }
 
+    function handleMixedTextFocus(event) {
+        const { name } = event.target;
+
+        if (!isBulkEditMode || dirtyFields.has(name) || !mixedFields.has(name)) {
+            return;
+        }
+
+        event.target.select();
+    }
+
+    function markFieldDirty(fieldName) {
+        if (!isBulkEditMode) {
+            return;
+        }
+
+        setDirtyFields(function updateDirtyFields(currentDirtyFields) {
+            const nextDirtyFields = new Set(currentDirtyFields);
+            nextDirtyFields.add(fieldName);
+
+            return nextDirtyFields;
+        });
+    }
+
     async function handleSubmit(event) {
         event.preventDefault();
 
-        const nextErrors = validateForm(formValues);
+        const nextErrors = isBulkEditMode
+            ? validateBulkForm(formValues, dirtyFields, editTasks)
+            : validateForm(formValues);
         setFormErrors(nextErrors);
 
         if (Object.keys(nextErrors).length > 0) {
             return;
         }
 
-        const wasSaved = await onSubmitTask(normalizeTaskDraft(formValues));
+        const taskDraft = isBulkEditMode
+            ? normalizeBulkTaskPatch(formValues, dirtyFields)
+            : normalizeTaskDraft(formValues);
+        const wasSaved = await onSubmitTask(taskDraft);
 
         if (wasSaved) {
             resetForm();
@@ -163,8 +224,9 @@ export default function TaskForm(props) {
     }
 
     function resetForm() {
-        setFormValues(getInitialFormValues(initialTask));
+        setFormValues(getInitialFormValuesForMode(initialTask, editTasks));
         setFormErrors({});
+        setDirtyFields(new Set());
     }
 
     function handleOpenAssigneeManager() {
@@ -183,6 +245,10 @@ export default function TaskForm(props) {
         }
 
         setFormValues(function updateSelectedAssignee(currentValues) {
+            if (currentValues.assignee === MIXED_SELECT_VALUE) {
+                return currentValues;
+            }
+
             return {
                 ...currentValues,
                 assignee: getUpdatedSelectedAssignee(currentValues.assignee, assigneeUpdate),
@@ -200,9 +266,10 @@ export default function TaskForm(props) {
                     name="name"
                     value={formValues.name}
                     error={Boolean(formErrors.name)}
-                    helperText={formErrors.name}
-                    required
+                    helperText={getFieldHelperText("name", formErrors, mixedFields, dirtyFields)}
+                    required={isRequiredField("name", mixedFields, dirtyFields, isBulkEditMode)}
                     fullWidth
+                    onFocus={handleMixedTextFocus}
                     onChange={handleFieldChange}
                 />
                 <TextField
@@ -211,14 +278,23 @@ export default function TaskForm(props) {
                     value={formValues.description}
                     multiline
                     minRows={3}
+                    helperText={getFieldHelperText(
+                        "description",
+                        formErrors,
+                        mixedFields,
+                        dirtyFields,
+                    )}
                     fullWidth
+                    onFocus={handleMixedTextFocus}
                     onChange={handleFieldChange}
                 />
                 <TextField
                     label="URL"
                     name="url"
                     value={formValues.url}
+                    helperText={getFieldHelperText("url", formErrors, mixedFields, dirtyFields)}
                     fullWidth
+                    onFocus={handleMixedTextFocus}
                     onChange={handleFieldChange}
                 />
                 <Box className="assignee-field-row">
@@ -231,6 +307,11 @@ export default function TaskForm(props) {
                             value={formValues.assignee}
                             onChange={handleFieldChange}
                         >
+                            {formValues.assignee === MIXED_SELECT_VALUE && (
+                                <MenuItem value={MIXED_SELECT_VALUE} disabled>
+                                    Mixed values
+                                </MenuItem>
+                            )}
                             {assigneeOptions.map(function renderAssignee(option) {
                                 return (
                                     <MenuItem key={option} value={option}>
@@ -260,6 +341,11 @@ export default function TaskForm(props) {
                         value={formValues.taskType}
                         onChange={handleFieldChange}
                     >
+                        {formValues.taskType === MIXED_SELECT_VALUE && (
+                            <MenuItem value={MIXED_SELECT_VALUE} disabled>
+                                Mixed values
+                            </MenuItem>
+                        )}
                         {TASK_TYPE_OPTIONS.map(function renderTaskType(option) {
                             return (
                                 <MenuItem key={option} value={option}>
@@ -270,33 +356,50 @@ export default function TaskForm(props) {
                     </Select>
                     {formErrors.taskType && <FormHelperText>{formErrors.taskType}</FormHelperText>}
                 </FormControl>
-                <FormControl fullWidth>
-                    <InputLabel id="task-level-label">Task level</InputLabel>
-                    <Select
-                        labelId="task-level-label"
-                        label="Task level"
-                        name="taskLevel"
-                        value={formValues.taskLevel}
-                        onChange={handleFieldChange}
-                    >
-                        {TASK_LEVEL_OPTIONS.map(function renderTaskLevel(option) {
-                            return (
-                                <MenuItem key={option} value={option}>
-                                    {option}
+                {shouldShowTaskLevelField && (
+                    <FormControl fullWidth>
+                        <InputLabel id="task-level-label">Task level</InputLabel>
+                        <Select
+                            labelId="task-level-label"
+                            label="Task level"
+                            name="taskLevel"
+                            value={formValues.taskLevel}
+                            onChange={handleFieldChange}
+                        >
+                            {formValues.taskLevel === MIXED_SELECT_VALUE && (
+                                <MenuItem value={MIXED_SELECT_VALUE} disabled>
+                                    Mixed values
                                 </MenuItem>
-                            );
-                        })}
-                    </Select>
-                </FormControl>
-                {isReleaseTask ? (
+                            )}
+                            {TASK_LEVEL_OPTIONS.map(function renderTaskLevel(option) {
+                                return (
+                                    <MenuItem key={option} value={option}>
+                                        {option}
+                                    </MenuItem>
+                                );
+                            })}
+                        </Select>
+                    </FormControl>
+                )}
+                {!shouldShowDateRangeFields ? (
                     <TextField
                         label="Release date"
                         name="startDate"
                         type="date"
                         value={formValues.startDate}
                         error={Boolean(formErrors.startDate)}
-                        helperText={formErrors.startDate}
-                        required
+                        helperText={getFieldHelperText(
+                            "startDate",
+                            formErrors,
+                            mixedFields,
+                            dirtyFields,
+                        )}
+                        required={isRequiredField(
+                            "startDate",
+                            mixedFields,
+                            dirtyFields,
+                            isBulkEditMode,
+                        )}
                         fullWidth
                         InputLabelProps={{ shrink: true }}
                         onChange={handleFieldChange}
@@ -309,8 +412,18 @@ export default function TaskForm(props) {
                             type="date"
                             value={formValues.startDate}
                             error={Boolean(formErrors.startDate)}
-                            helperText={formErrors.startDate}
-                            required
+                            helperText={getFieldHelperText(
+                                "startDate",
+                                formErrors,
+                                mixedFields,
+                                dirtyFields,
+                            )}
+                            required={isRequiredField(
+                                "startDate",
+                                mixedFields,
+                                dirtyFields,
+                                isBulkEditMode,
+                            )}
                             fullWidth
                             InputLabelProps={{ shrink: true }}
                             onChange={handleFieldChange}
@@ -321,15 +434,28 @@ export default function TaskForm(props) {
                             type="date"
                             value={formValues.stopDate}
                             error={Boolean(formErrors.stopDate)}
-                            helperText={formErrors.stopDate}
-                            required
+                            helperText={getFieldHelperText(
+                                "stopDate",
+                                formErrors,
+                                mixedFields,
+                                dirtyFields,
+                            )}
+                            required={
+                                formValues.taskType !== RELEASE_TASK_TYPE
+                                && isRequiredField(
+                                    "stopDate",
+                                    mixedFields,
+                                    dirtyFields,
+                                    isBulkEditMode,
+                                )
+                            }
                             fullWidth
                             InputLabelProps={{ shrink: true }}
                             onChange={handleFieldChange}
                         />
                     </Box>
                 )}
-                {!isReleaseTask && (
+                {(!isReleaseTask || isBulkEditMode) && (
                     <Box className="progress-field">
                         <Slider
                             className="progress-slider"
@@ -339,9 +465,30 @@ export default function TaskForm(props) {
                             step={PROGRESS_SLIDER_STEP}
                             marks={PROGRESS_SLIDER_MARKS}
                             valueLabelDisplay="on"
-                            valueLabelFormat={formatProgressValue}
+                            valueLabelFormat={function formatSliderProgressValue(value) {
+                                return formatProgressValue(
+                                    value,
+                                    mixedFields.has("progressPercent"),
+                                    dirtyFields.has("progressPercent"),
+                                );
+                            }}
                             onChange={handleProgressChange}
                         />
+                        {getFieldHelperText(
+                            "progressPercent",
+                            formErrors,
+                            mixedFields,
+                            dirtyFields,
+                        ) && (
+                            <FormHelperText>
+                                {getFieldHelperText(
+                                    "progressPercent",
+                                    formErrors,
+                                    mixedFields,
+                                    dirtyFields,
+                                )}
+                            </FormHelperText>
+                        )}
                     </Box>
                 )}
                 <Box className="task-form-actions">
@@ -407,26 +554,120 @@ function validateForm(formValues) {
 }
 
 
+function validateBulkForm(formValues, dirtyFields, tasks) {
+    const errors = {};
+    const bulkPatch = normalizeBulkTaskPatch(formValues, dirtyFields);
+
+    if (dirtyFields.has("name") && !bulkPatch.name) {
+        errors.name = "Task name is required.";
+    }
+
+    if (dirtyFields.has("taskType") && !bulkPatch.taskType) {
+        errors.taskType = "Task type is required.";
+    }
+
+    if (dirtyFields.has("startDate") && !bulkPatch.startDate) {
+        errors.startDate = "Start date is required.";
+    }
+
+    if (dirtyFields.has("stopDate") && !bulkPatch.stopDate) {
+        const hasNonReleaseTask = tasks.some(function matchNonReleaseTask(task) {
+            const nextTaskType = bulkPatch.taskType || task.taskType;
+
+            return nextTaskType !== RELEASE_TASK_TYPE;
+        });
+
+        if (hasNonReleaseTask) {
+            errors.stopDate = "Stop date is required.";
+        }
+    }
+
+    const hasInvalidDateRange = tasks.some(function matchInvalidTaskRange(task) {
+        const nextTask = applyBulkTaskPatchPreview(task, bulkPatch);
+
+        return (
+            nextTask.taskType !== RELEASE_TASK_TYPE
+            && nextTask.startDate
+            && nextTask.stopDate
+            && nextTask.stopDate < nextTask.startDate
+        );
+    });
+
+    if (hasInvalidDateRange) {
+        errors.stopDate = "Stop date must be on or after start date.";
+    }
+
+    return errors;
+}
+
+
+function getInitialFormValuesForMode(initialTask, editTasks) {
+    if (editTasks.length > 1) {
+        return getBulkInitialFormValues(editTasks);
+    }
+
+    if (editTasks.length === 1) {
+        return getInitialFormValues(editTasks[0]);
+    }
+
+    return getInitialFormValues(initialTask);
+}
+
+
+function shouldShowTaskDateRangeFields(isBulkEditMode, isReleaseTask) {
+    return isBulkEditMode || !isReleaseTask;
+}
+
+
+function shouldShowTaskLevelSelect(isBulkEditMode, isReleaseTask) {
+    return isBulkEditMode || !isReleaseTask;
+}
+
+
 function getInitialFormValues(task) {
     if (!task) {
-        return DEFAULT_FORM_VALUES;
+        return {
+            ...DEFAULT_FORM_VALUES,
+        };
     }
+
+    const taskType = getSupportedTaskType(task.taskType);
+    const isReleaseTask = taskType === RELEASE_TASK_TYPE;
 
     return {
         name: task.name || "",
         description: task.description || "",
         url: task.url || "",
         assignee: task.assignee || UNASSIGNED_ASSIGNEE,
-        taskType: getSupportedTaskType(task.taskType),
-        taskLevel: getSupportedTaskLevel(task.taskLevel),
+        taskType,
+        taskLevel: isReleaseTask
+            ? DEFAULT_TASK_LEVEL
+            : getSupportedTaskLevel(task.taskLevel),
         startDate: task.startDate || "",
-        stopDate: task.taskType === RELEASE_TASK_TYPE
+        stopDate: isReleaseTask
             ? task.startDate || ""
             : task.stopDate || "",
-        progressPercent: task.taskType === RELEASE_TASK_TYPE
+        progressPercent: isReleaseTask
             ? 100
             : task.progressPercent || 0,
     };
+}
+
+
+function getBulkInitialFormValues(tasks) {
+    const mixedFields = getMixedFieldSet(tasks);
+    const bulkValues = {};
+
+    FORM_FIELD_NAMES.forEach(function mapBulkFieldValue(fieldName) {
+        if (mixedFields.has(fieldName)) {
+            bulkValues[fieldName] = getMixedFieldValue(fieldName);
+            return;
+        }
+
+        bulkValues[fieldName] = getNormalizedTaskFieldValue(tasks[0], fieldName);
+    });
+
+    return bulkValues;
 }
 
 
@@ -437,7 +678,9 @@ function normalizeTaskDraft(formValues) {
         url: formValues.url.trim(),
         assignee: formValues.assignee,
         taskType: formValues.taskType,
-        taskLevel: formValues.taskLevel,
+        taskLevel: formValues.taskType === RELEASE_TASK_TYPE
+            ? DEFAULT_TASK_LEVEL
+            : formValues.taskLevel,
         startDate: formValues.startDate,
         stopDate: formValues.taskType === RELEASE_TASK_TYPE
             ? formValues.startDate
@@ -446,6 +689,144 @@ function normalizeTaskDraft(formValues) {
             ? 100
             : formValues.progressPercent,
     };
+}
+
+
+function normalizeBulkTaskPatch(formValues, dirtyFields) {
+    const taskPatch = {};
+
+    dirtyFields.forEach(function mapDirtyField(fieldName) {
+        taskPatch[fieldName] = normalizeBulkPatchField(fieldName, formValues[fieldName]);
+    });
+
+    return taskPatch;
+}
+
+
+function normalizeBulkPatchField(fieldName, value) {
+    if (fieldName === "progressPercent") {
+        return value;
+    }
+
+    if (typeof value !== "string") {
+        return value;
+    }
+
+    return value.trim();
+}
+
+
+function applyBulkTaskPatchPreview(task, bulkPatch) {
+    const nextTaskType = bulkPatch.taskType || task.taskType;
+    const nextTask = {
+        ...task,
+    };
+
+    Object.entries(bulkPatch).forEach(function applyPatchField([fieldName, fieldValue]) {
+        if (nextTaskType === RELEASE_TASK_TYPE && fieldName === "stopDate") {
+            return;
+        }
+
+        if (nextTaskType === RELEASE_TASK_TYPE && fieldName === "progressPercent") {
+            return;
+        }
+
+        if (nextTaskType === RELEASE_TASK_TYPE && fieldName === "taskLevel") {
+            return;
+        }
+
+        nextTask[fieldName] = fieldValue;
+    });
+
+    if (nextTaskType === RELEASE_TASK_TYPE) {
+        nextTask.taskType = RELEASE_TASK_TYPE;
+        nextTask.taskLevel = DEFAULT_TASK_LEVEL;
+        nextTask.stopDate = nextTask.startDate;
+        nextTask.progressPercent = 100;
+    }
+
+    return nextTask;
+}
+
+
+function getEditTasks(initialTask, initialTasks) {
+    if (initialTasks.length > 0) {
+        return initialTasks;
+    }
+
+    if (initialTask) {
+        return [initialTask];
+    }
+
+    return [];
+}
+
+
+function getMixedFieldSet(tasks) {
+    const mixedFields = new Set();
+
+    if (tasks.length <= 1) {
+        return mixedFields;
+    }
+
+    FORM_FIELD_NAMES.forEach(function inspectField(fieldName) {
+        const firstValue = getNormalizedTaskFieldValue(tasks[0], fieldName);
+        const hasMixedValue = tasks.some(function matchDifferentFieldValue(task) {
+            return getNormalizedTaskFieldValue(task, fieldName) !== firstValue;
+        });
+
+        if (hasMixedValue) {
+            mixedFields.add(fieldName);
+        }
+    });
+
+    return mixedFields;
+}
+
+
+function getNormalizedTaskFieldValue(task, fieldName) {
+    if (fieldName === "assignee") {
+        return task.assignee || UNASSIGNED_ASSIGNEE;
+    }
+
+    if (fieldName === "taskType") {
+        return getSupportedTaskType(task.taskType);
+    }
+
+    if (fieldName === "taskLevel") {
+        if (getSupportedTaskType(task.taskType) === RELEASE_TASK_TYPE) {
+            return DEFAULT_TASK_LEVEL;
+        }
+
+        return getSupportedTaskLevel(task.taskLevel);
+    }
+
+    if (fieldName === "progressPercent") {
+        if (task.taskType === RELEASE_TASK_TYPE) {
+            return 100;
+        }
+
+        return task.progressPercent || 0;
+    }
+
+    return task[fieldName] || "";
+}
+
+
+function getMixedFieldValue(fieldName) {
+    if (fieldName === "assignee" || fieldName === "taskType" || fieldName === "taskLevel") {
+        return MIXED_SELECT_VALUE;
+    }
+
+    if (fieldName === "progressPercent") {
+        return 0;
+    }
+
+    if (fieldName === "startDate" || fieldName === "stopDate") {
+        return "";
+    }
+
+    return MIXED_TEXT_VALUE;
 }
 
 
@@ -498,6 +879,36 @@ function getUpdatedSelectedAssignee(selectedAssignee, assigneeUpdate) {
 }
 
 
-function formatProgressValue(value) {
+function getFieldHelperText(fieldName, formErrors, mixedFields, dirtyFields) {
+    if (formErrors[fieldName]) {
+        return formErrors[fieldName];
+    }
+
+    if (mixedFields.has(fieldName) && !dirtyFields.has(fieldName)) {
+        return "Mixed values";
+    }
+
+    return "";
+}
+
+
+function isRequiredField(fieldName, mixedFields, dirtyFields, isBulkEditMode) {
+    if (!isBulkEditMode) {
+        return true;
+    }
+
+    if (mixedFields.has(fieldName) && !dirtyFields.has(fieldName)) {
+        return false;
+    }
+
+    return true;
+}
+
+
+function formatProgressValue(value, hasMixedProgress = false, hasDirtyProgress = true) {
+    if (hasMixedProgress && !hasDirtyProgress) {
+        return "Mixed";
+    }
+
     return `${value}%`;
 }

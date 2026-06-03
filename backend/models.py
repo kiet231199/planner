@@ -9,6 +9,8 @@ MIN_PROGRESS_PERCENT = 0
 HEX_COLOR_PATTERN = r"^#[0-9A-Fa-f]{6}$"
 UNASSIGNED_ASSIGNEE = "Unassigned"
 DAY_OFF_ALL_ASSIGNEES = "All"
+DEFAULT_TASK_LEVEL = "Level 1"
+RELEASE_TASK_TYPE = "Release"
 RESERVED_ASSIGNEE_NAMES = {
     UNASSIGNED_ASSIGNEE.casefold(),
     DAY_OFF_ALL_ASSIGNEES.casefold(),
@@ -55,7 +57,8 @@ class TaskCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_date_range(self) -> "TaskCreate":
-        if self.taskType == "Release":
+        if self.taskType == RELEASE_TASK_TYPE:
+            self.taskLevel = DEFAULT_TASK_LEVEL
             self.stopDate = self.startDate
             self.progressPercent = MAX_PROGRESS_PERCENT
 

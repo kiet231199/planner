@@ -2,6 +2,7 @@ import AddIcon from "@mui/icons-material/Add";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ContentCopyOutlinedIcon from "@mui/icons-material/ContentCopyOutlined";
+import ContentCutOutlinedIcon from "@mui/icons-material/ContentCutOutlined";
 import ContentPasteOutlinedIcon from "@mui/icons-material/ContentPasteOutlined";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
@@ -28,6 +29,7 @@ export default function TaskToolbar(props) {
     const {
         canEditSelectedTask,
         canCopySelectedTasks,
+        canCutSelectedTasks,
         canPasteCopiedTasks,
         canRedo,
         canUndo,
@@ -40,6 +42,7 @@ export default function TaskToolbar(props) {
         onDeleteSelectedTask,
         onEditSelectedTask,
         onCopySelectedTasks,
+        onCutSelectedTasks,
         onPasteCopiedTasks,
         onRefreshPlanner,
         onRedoTaskChange,
@@ -93,6 +96,13 @@ export default function TaskToolbar(props) {
                         onClick={onCopySelectedTasks}
                     >
                         <ContentCopyOutlinedIcon />
+                    </ToolbarIconButton>
+                    <ToolbarIconButton
+                        label="Cut"
+                        disabled={!canCutSelectedTasks}
+                        onClick={onCutSelectedTasks}
+                    >
+                        <ContentCutOutlinedIcon />
                     </ToolbarIconButton>
                     <ToolbarIconButton
                         label="Paste"

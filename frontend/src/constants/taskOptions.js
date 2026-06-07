@@ -23,7 +23,7 @@ export const TASK_TYPE_COLORS = {
     Dev: "#3eb489",
     Test: "#64b5f6",
     Doc: "#8e24aa",
-    Release: "#424242",
+    Release: "#52595d",
 };
 
 export const DEFAULT_TASK_TYPE_COLOR = TASK_TYPE_COLORS[DEFAULT_TASK_TYPE];

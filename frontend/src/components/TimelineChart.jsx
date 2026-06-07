@@ -12,11 +12,13 @@ import {
 import {
     DAY_OFF_ALL_ASSIGNEES,
     DEFAULT_TASK_TYPE_COLOR,
+    RELEASE_TASK_TYPE,
     TASK_TYPE_COLORS,
 } from "../constants/taskOptions";
 
 
-const DRAG_MOUSE_BUTTON = 0;
+const LEFT_MOUSE_BUTTON = 0;
+const RIGHT_MOUSE_BUTTON = 2;
 const MIN_RESIZE_PREVIEW_WIDTH_PIXELS = 28;
 const MIN_TIMELINE_HEADER_ROW_COUNT = 1;
 const MIN_TIMELINE_BODY_ROW_COUNT = 1;
@@ -30,6 +32,9 @@ const STOP_RESIZE_EDGE = "stop";
 const TASK_DRAG_THRESHOLD_PIXELS = 4;
 const TASK_DRAG_TYPE_MOVE = "task-move";
 const TASK_DRAG_TYPE_RESIZE = "task-resize";
+const TIMELINE_DRAG_TYPE_PAN = "timeline-pan";
+const TIMELINE_DRAG_TYPE_RECTANGLE_SELECT = "rectangle-select";
+const RECTANGLE_SELECTION_THRESHOLD_PIXELS = 4;
 const TODAY_HIGHLIGHT_MODE_COLUMN = "column";
 const TODAY_HIGHLIGHT_MODE_LINE = "line";
 const TASK_HOVER_BUBBLE_OFFSET_Y_PIXELS = 14;
@@ -43,8 +48,20 @@ const ZOOM_IN_DIRECTION = 10;
 const ZOOM_OUT_DIRECTION = -10;
 const TASK_BAR_HORIZONTAL_INSET_PIXELS = 4;
 const TASK_BAR_VERTICAL_INSET_PIXELS = 6;
+const TASK_BAR_HEIGHT_PIXELS = 26;
 const MIN_TASK_BAR_DISPLAY_WIDTH_PIXELS = 20;
 const MIN_TASK_BAR_RESIZE_WIDTH_PIXELS = 36;
+const TASK_BAR_RESIZE_HANDLE_WIDTH_PIXELS = 10;
+const TASK_BAR_LABEL_HORIZONTAL_PADDING_PIXELS = 8;
+const TASK_BAR_LABEL_FONT = "700 13.76px Roboto, Arial, sans-serif";
+const EVENT_BAR_HEIGHT_PIXELS = 88;
+const EVENT_BAR_VIEWPORT_INSET_PIXELS = 16;
+const EVENT_BAR_VERTICAL_OFFSET_PIXELS = 12;
+const EVENT_BAR_SCREEN_BOTTOM_OFFSET_PIXELS = 0;
+const EVENT_MARKER_SIZE_PIXELS = 34;
+const EVENT_MARKER_COLUMN_NORMAL = "normal";
+const EVENT_MARKER_COLUMN_WEEKEND = "weekend";
+const EVENT_MARKER_COLUMN_TODAY = "today";
 const COMPLETED_PROGRESS_PERCENT = 100;
 const PERCENT_DIVISOR = 100;
 const MINIMUM_TASK_DURATION_DAYS = 1;
@@ -53,6 +70,13 @@ const INITIAL_VISIBLE_TIMELINE_RANGE = {
     left: 0,
     right: TIMELINE_HEADER_OVERSCAN_PIXELS * 2,
 };
+const INITIAL_FIXED_EVENT_BAR_LAYOUT = {
+    bottom: EVENT_BAR_SCREEN_BOTTOM_OFFSET_PIXELS,
+    left: 0,
+    width: 0,
+};
+const taskBarLabelWidthCache = new Map();
+let taskBarLabelMeasureContext = null;
 
 
 export default function TimelineChart(props) {
@@ -60,6 +84,7 @@ export default function TimelineChart(props) {
         panelRef: externalPanelRef,
         tasks,
         dayOffs = [],
+        cutTaskIds = [],
         highlightedTaskId,
         isLoading,
         isRowReorderDisabled = false,
@@ -68,7 +93,6 @@ export default function TimelineChart(props) {
         showTimelineHorizontalGridLines = true,
         zoomIndex,
         onClearHighlight,
-        onClearSelection,
         onHighlightTask,
         onMoveTasks,
         onOpenDayOffEdit,
@@ -76,6 +100,7 @@ export default function TimelineChart(props) {
         onPanelScroll,
         onResizeTaskDates,
         onSelectTask,
+        onSelectTasks,
         onSelectDayOffDate,
         onTimelineZoom,
     } = props;
@@ -84,11 +109,12 @@ export default function TimelineChart(props) {
     const dragStateRef = useRef(null);
     const didSetInitialScrollRef = useRef(false);
     const metricsRef = useRef(null);
+    const tasksRef = useRef(tasks);
     const onClearHighlightRef = useRef(onClearHighlight);
-    const onClearSelectionRef = useRef(onClearSelection);
     const onMoveTasksRef = useRef(onMoveTasks);
     const onResizeTaskDatesRef = useRef(onResizeTaskDates);
     const onSelectTaskRef = useRef(onSelectTask);
+    const onSelectTasksRef = useRef(onSelectTasks);
     const onTimelineZoomRef = useRef(onTimelineZoom);
     const pendingTaskDragPointerRef = useRef(null);
     const pendingZoomAnchorRef = useRef(null);
@@ -98,6 +124,7 @@ export default function TimelineChart(props) {
     const visibleTimelineRangeFrameIdRef = useRef(null);
     const pendingTimelinePanPointerRef = useRef(null);
     const pendingWheelZoomDirectionRef = useRef(null);
+    const eventBarRef = useRef(null);
     const taskDragFrameIdRef = useRef(null);
     const timelinePanFrameIdRef = useRef(null);
     const timelineZoomFrameIdRef = useRef(null);
@@ -110,8 +137,12 @@ export default function TimelineChart(props) {
     const pendingTaskHoverPositionRef = useRef(null);
     const [panelWidth, setPanelWidth] = useState(0);
     const [panelHeight, setPanelHeight] = useState(0);
+    const [selectionRectangle, setSelectionRectangle] = useState(null);
     const [taskDragPreview, setTaskDragPreview] = useState(null);
     const [taskHoverBubble, setTaskHoverBubble] = useState(null);
+    const [eventBarFixedLayout, setEventBarFixedLayout] = useState(
+        INITIAL_FIXED_EVENT_BAR_LAYOUT,
+    );
     const [visibleTimelineRange, setVisibleTimelineRange] = useState(
         INITIAL_VISIBLE_TIMELINE_RANGE,
     );
@@ -135,6 +166,9 @@ export default function TimelineChart(props) {
 
         return new Set(taskDragPreview.taskIds);
     }, [taskDragPreview]);
+    const cutTaskIdSet = useMemo(function memoizeCutTaskIdSet() {
+        return new Set(cutTaskIds);
+    }, [cutTaskIds]);
     const visibleBodyRowCount = useMemo(function memoizeVisibleBodyRowCount() {
         return getVisibleBodyRowCount(panelHeight, metrics);
     }, [metrics, panelHeight]);
@@ -168,7 +202,11 @@ export default function TimelineChart(props) {
     const dayOffHighlights = useMemo(function memoizeDayOffHighlights() {
         return getDayOffHighlights(dayOffs, tasks, metrics);
     }, [dayOffs, metrics, tasks]);
+    const eventGroups = useMemo(function memoizeEventGroups() {
+        return getReleaseEventGroups(tasks, metrics);
+    }, [metrics, tasks]);
     metricsRef.current = metrics;
+    tasksRef.current = tasks;
 
     const setTimelinePanelElement = useCallback(function setTimelinePanelElement(panel) {
         timelinePanelRef.current = panel;
@@ -178,6 +216,8 @@ export default function TimelineChart(props) {
         }
 
         if (panel) {
+            syncEventBarScrollPosition(panel);
+            updateFixedEventBarLayout(panel);
             scheduleVisibleTimelineRangeUpdate(panel);
         }
     }, [externalPanelRef]);
@@ -188,14 +228,14 @@ export default function TimelineChart(props) {
 
     useEffect(function keepTimelineClearHandlersCurrent() {
         onClearHighlightRef.current = onClearHighlight;
-        onClearSelectionRef.current = onClearSelection;
-    }, [onClearHighlight, onClearSelection]);
+    }, [onClearHighlight]);
 
     useEffect(function keepTaskDragHandlersCurrent() {
         onMoveTasksRef.current = onMoveTasks;
         onResizeTaskDatesRef.current = onResizeTaskDates;
         onSelectTaskRef.current = onSelectTask;
-    }, [onMoveTasks, onResizeTaskDates, onSelectTask]);
+        onSelectTasksRef.current = onSelectTasks;
+    }, [onMoveTasks, onResizeTaskDates, onSelectTask, onSelectTasks]);
 
     useEffect(function clearPendingDaySelectionOnUnmount() {
         return function clearPendingTimelineWork() {
@@ -213,6 +253,16 @@ export default function TimelineChart(props) {
 
     useLayoutEffect(function keepTaskHoverBubblePositionSynced() {
         applyStoredTaskHoverBubblePosition();
+    });
+
+    useLayoutEffect(function keepEventBarScrollPositionSynced() {
+        const panel = timelinePanelRef.current;
+
+        if (!panel) {
+            return;
+        }
+
+        syncEventBarScrollPosition(panel);
     });
 
     useLayoutEffect(function trackTimelinePanelSize() {
@@ -310,10 +360,25 @@ export default function TimelineChart(props) {
             function updatePanelSizeFrame() {
                 const nextPanelWidth = panel.clientWidth;
                 const nextPanelHeight = panel.clientHeight;
+                const nextEventBarFixedLayout = getFixedEventBarLayout(panel);
 
                 panelSizeFrameIdRef.current = null;
 
                 updateVisibleTimelineRange(panel);
+                setEventBarFixedLayout(function updateMeasuredEventBarFixedLayout(
+                    currentEventBarFixedLayout,
+                ) {
+                    if (
+                        hasSameFixedEventBarLayout(
+                            currentEventBarFixedLayout,
+                            nextEventBarFixedLayout,
+                        )
+                    ) {
+                        return currentEventBarFixedLayout;
+                    }
+
+                    return nextEventBarFixedLayout;
+                });
                 setPanelWidth(function updateMeasuredPanelWidth(currentPanelWidth) {
                     if (currentPanelWidth === nextPanelWidth) {
                         pendingResizeAnchorRef.current = null;
@@ -365,6 +430,7 @@ export default function TimelineChart(props) {
         const timelineWidth = metricsRef.current ? metricsRef.current.timelineWidth : 0;
         const nextVisibleTimelineRange = getVisibleTimelineRange(panel, timelineWidth);
 
+        syncEventBarScrollPosition(panel);
         setVisibleTimelineRange(function updateCurrentVisibleTimelineRange(
             currentVisibleTimelineRange,
         ) {
@@ -379,6 +445,36 @@ export default function TimelineChart(props) {
 
             return nextVisibleTimelineRange;
         });
+    }
+
+    function updateFixedEventBarLayout(panel) {
+        setEventBarFixedLayout(function updateCurrentEventBarFixedLayout(
+            currentEventBarFixedLayout,
+        ) {
+            const nextEventBarFixedLayout = getFixedEventBarLayout(panel);
+
+            if (
+                hasSameFixedEventBarLayout(
+                    currentEventBarFixedLayout,
+                    nextEventBarFixedLayout,
+                )
+            ) {
+                return currentEventBarFixedLayout;
+            }
+
+            return nextEventBarFixedLayout;
+        });
+    }
+
+    function syncEventBarScrollPosition(panel) {
+        if (!eventBarRef.current) {
+            return;
+        }
+
+        eventBarRef.current.style.setProperty(
+            "--timeline-scroll-left",
+            `${panel.scrollLeft}px`,
+        );
     }
 
     function cancelVisibleTimelineRangeFrame() {
@@ -425,6 +521,7 @@ export default function TimelineChart(props) {
         }
 
         dragState.panel.scrollLeft = dragState.startScrollLeft - dragDistance;
+        syncEventBarScrollPosition(dragState.panel);
     }
 
     function flushTimelinePanFrame(dragState) {
@@ -452,6 +549,81 @@ export default function TimelineChart(props) {
         window.cancelAnimationFrame(timelinePanFrameIdRef.current);
         timelinePanFrameIdRef.current = null;
         pendingTimelinePanPointerRef.current = null;
+    }
+
+    function startRectangleSelection(panel, event) {
+        const currentMetrics = metricsRef.current;
+        const startPoint = getTimelineSelectionPoint(
+            panel,
+            event,
+            currentMetrics.timelineWidth,
+            currentMetrics.headerHeight,
+            timelineBodyHeight,
+        );
+
+        dragStateRef.current = {
+            type: TIMELINE_DRAG_TYPE_RECTANGLE_SELECT,
+            panel,
+            startClientX: event.clientX,
+            startClientY: event.clientY,
+            startPoint,
+            currentPoint: startPoint,
+            bodyHeight: timelineBodyHeight,
+            headerHeight: currentMetrics.headerHeight,
+            selectionMode: getRectangleSelectionMode(event),
+            timelineWidth: currentMetrics.timelineWidth,
+            hasMoved: false,
+        };
+    }
+
+    function updateRectangleSelectionPreview(dragState, event) {
+        const movement = getPointerMovement(dragState, event);
+
+        if (!dragState.hasMoved && movement < RECTANGLE_SELECTION_THRESHOLD_PIXELS) {
+            return;
+        }
+
+        dragState.hasMoved = true;
+        dragState.currentPoint = getTimelineSelectionPoint(
+            dragState.panel,
+            event,
+            dragState.timelineWidth,
+            dragState.headerHeight,
+            dragState.bodyHeight,
+        );
+
+        setSelectionRectangle(getSelectionRectangle(dragState.startPoint, dragState.currentPoint));
+    }
+
+    function finishRectangleSelection(dragState, event) {
+        const movement = getPointerMovement(dragState, event);
+        const hasSelectedByDrag = dragState.hasMoved
+            || movement >= RECTANGLE_SELECTION_THRESHOLD_PIXELS;
+
+        dragStateRef.current = null;
+        setSelectionRectangle(null);
+
+        if (!hasSelectedByDrag) {
+            clearTimelineTaskSelection();
+            return;
+        }
+
+        const currentPoint = getTimelineSelectionPoint(
+            dragState.panel,
+            event,
+            dragState.timelineWidth,
+            dragState.headerHeight,
+            dragState.bodyHeight,
+        );
+        const rectangle = getSelectionRectangle(dragState.startPoint, currentPoint);
+        const taskIds = getRectangleSelectedTaskIds(
+            metricsRef.current.bars,
+            rectangle,
+            isLeftToRightSelection(dragState.startPoint, currentPoint),
+        );
+
+        onClearHighlightRef.current();
+        onSelectTasksRef.current(taskIds, dragState.selectionMode, tasksRef.current);
     }
 
     function scheduleTimelineZoom(zoomDirection) {
@@ -489,9 +661,9 @@ export default function TimelineChart(props) {
     }
 
 
-    function clearTimelineSelection() {
+    function clearTimelineTaskSelection() {
         onClearHighlightRef.current();
-        onClearSelectionRef.current();
+        onSelectTasksRef.current([], getDefaultSelectionMode(), tasksRef.current);
     }
 
     useEffect(function bindDragListeners() {
@@ -507,7 +679,14 @@ export default function TimelineChart(props) {
                 return;
             }
 
-            scheduleTimelinePan(dragState, event);
+            if (isRectangleSelectionDrag(dragState)) {
+                updateRectangleSelectionPreview(dragState, event);
+                return;
+            }
+
+            if (isTimelinePanDrag(dragState)) {
+                scheduleTimelinePan(dragState, event);
+            }
         }
 
         function handleMouseUp(event) {
@@ -522,14 +701,15 @@ export default function TimelineChart(props) {
                 return;
             }
 
+            if (isRectangleSelectionDrag(dragState)) {
+                finishRectangleSelection(dragState, event);
+                return;
+            }
+
             flushTimelinePanFrame(dragState);
 
             dragStateRef.current = null;
             setTimelinePanelDragging(dragState.panel, false);
-
-            if (!dragState.hasMoved) {
-                clearTimelineSelection();
-            }
         }
 
         window.addEventListener("mousemove", handleMouseMove);
@@ -565,6 +745,7 @@ export default function TimelineChart(props) {
             if (shouldScrollTimelineHorizontally(event)) {
                 event.preventDefault();
                 scrollTimelineHorizontally(panel, getHorizontalWheelDelta(event));
+                syncEventBarScrollPosition(panel);
             }
         }
 
@@ -579,16 +760,17 @@ export default function TimelineChart(props) {
     }, []);
 
     function handleTimelinePanelScroll(event) {
+        syncEventBarScrollPosition(event.currentTarget);
         scheduleVisibleTimelineRangeUpdate(event.currentTarget);
         onPanelScroll(event);
     }
 
     function handleTimelineMouseDown(event) {
-        if (event.button !== DRAG_MOUSE_BUTTON) {
+        if (event.target instanceof Element && event.target.closest(".task-bar")) {
             return;
         }
 
-        if (event.target instanceof Element && event.target.closest(".task-bar")) {
+        if (event.target instanceof Element && event.target.closest(".timeline-header")) {
             return;
         }
 
@@ -598,9 +780,23 @@ export default function TimelineChart(props) {
             return;
         }
 
+        if (isTimelineScrollbarMouseDown(event, panel)) {
+            return;
+        }
+
         event.preventDefault();
 
+        if (event.button === LEFT_MOUSE_BUTTON) {
+            startRectangleSelection(panel, event);
+            return;
+        }
+
+        if (event.button !== RIGHT_MOUSE_BUTTON) {
+            return;
+        }
+
         dragStateRef.current = {
+            type: TIMELINE_DRAG_TYPE_PAN,
             panel,
             startClientX: event.clientX,
             startClientY: event.clientY,
@@ -610,8 +806,12 @@ export default function TimelineChart(props) {
         setTimelinePanelDragging(panel, true);
     }
 
+    function handleTimelineContextMenu(event) {
+        event.preventDefault();
+    }
+
     function handleTaskBarMouseDown(event, task) {
-        if (event.button !== DRAG_MOUSE_BUTTON) {
+        if (event.button !== LEFT_MOUSE_BUTTON) {
             return;
         }
 
@@ -829,7 +1029,7 @@ export default function TimelineChart(props) {
     }
 
     function handleTaskResizeMouseDown(event, task, resizeEdge) {
-        if (event.button !== DRAG_MOUSE_BUTTON) {
+        if (event.button !== LEFT_MOUSE_BUTTON) {
             return;
         }
 
@@ -1063,6 +1263,7 @@ export default function TimelineChart(props) {
         <Box
             ref={setTimelinePanelElement}
             className="timeline-panel"
+            onContextMenu={handleTimelineContextMenu}
             onMouseDown={handleTimelineMouseDown}
             onMouseLeave={handleTimelineMouseLeave}
             onScroll={handleTimelinePanelScroll}
@@ -1270,6 +1471,7 @@ export default function TimelineChart(props) {
                 >
                     {metrics.bars.map(function renderTaskBar(bar) {
                         const isSelected = selectedTaskIds.includes(bar.task.id);
+                        const isCut = cutTaskIdSet.has(bar.task.id);
                         const isDelayed = isTaskDelayed(bar.task, metrics.todayDate);
                         const isTaskDragPreviewTarget = draggedTaskIdSet.has(bar.task.id);
                         const taskBarLayout = getTaskBarLayout(
@@ -1286,6 +1488,11 @@ export default function TimelineChart(props) {
                             selectedTaskIds.length <= 1
                             && taskBarVisualLayout.width >= MIN_TASK_BAR_RESIZE_WIDTH_PIXELS
                         );
+                        const shouldShowTaskLabel = shouldShowTaskBarLabel(
+                            bar.task.name,
+                            taskBarVisualLayout.width,
+                            canResizeTask,
+                        );
 
                         return (
                             <Box
@@ -1293,10 +1500,12 @@ export default function TimelineChart(props) {
                                 ref={function setRenderedTaskBarElement(taskBarElement) {
                                     setTaskBarElement(bar.task.id, taskBarElement);
                                 }}
+                                aria-label={bar.task.name}
                                 role="button"
                                 tabIndex={0}
                                 className={getTaskBarClassName(
                                     isSelected,
+                                    isCut,
                                     isDelayed,
                                     isTaskDragPreviewTarget,
                                 )}
@@ -1358,9 +1567,11 @@ export default function TimelineChart(props) {
                                         width: `${bar.task.progressPercent}%`,
                                     }}
                                 />
-                                <Typography className="task-bar-label">
-                                    {bar.task.name}
-                                </Typography>
+                                {shouldShowTaskLabel && (
+                                    <Typography className="task-bar-label">
+                                        {bar.task.name}
+                                    </Typography>
+                                )}
                                 {canResizeTask && (
                                     <Box
                                         className="task-bar-resize-handle task-bar-resize-handle-right"
@@ -1406,6 +1617,81 @@ export default function TimelineChart(props) {
                             </Box>
                         </Box>
                     )}
+                </Box>
+                <Box
+                    className="timeline-selection-layer"
+                    sx={{
+                        top: `${metrics.headerHeight}px`,
+                        bottom: 0,
+                    }}
+                >
+                    {selectionRectangle && (
+                        <Box
+                            className="timeline-selection-rectangle"
+                            sx={{
+                                left: `${selectionRectangle.left}px`,
+                                top: `${selectionRectangle.top}px`,
+                                width: `${selectionRectangle.width}px`,
+                                height: `${selectionRectangle.height}px`,
+                            }}
+                        />
+                    )}
+                </Box>
+                <Box
+                    ref={eventBarRef}
+                    className="timeline-event-bar"
+                    sx={{
+                        bottom: `${eventBarFixedLayout.bottom}px`,
+                        height: `${EVENT_BAR_HEIGHT_PIXELS}px`,
+                        left: `${eventBarFixedLayout.left}px`,
+                        width: `${eventBarFixedLayout.width}px`,
+                        "--timeline-event-marker-size": `${EVENT_MARKER_SIZE_PIXELS}px`,
+                    }}
+                    onMouseDown={function stopEventBarMouseDown(event) {
+                        event.stopPropagation();
+                    }}
+                >
+                    <Box
+                        className="timeline-event-bar-track"
+                        sx={{
+                            left: `${EVENT_BAR_VIEWPORT_INSET_PIXELS}px`,
+                            width: `${getFixedEventBarTrackWidth(eventBarFixedLayout.width)}px`,
+                        }}
+                    />
+                    {eventGroups.map(function renderEventGroup(eventGroup) {
+                        return (
+                            <Box
+                                key={eventGroup.key}
+                                className={getEventMarkerClassName(eventGroup.columnType)}
+                                sx={{
+                                    left: (
+                                        `calc(${eventGroup.left}px - var(--timeline-scroll-left, 0px))`
+                                    ),
+                                }}
+                            >
+                                <Box className="timeline-event-count">
+                                    {eventGroup.events.length}
+                                </Box>
+                                <Box className="timeline-event-flags">
+                                    {eventGroup.events.map(function renderEventFlag(eventItem) {
+                                        return (
+                                            <Box
+                                                key={eventItem.id}
+                                                className="timeline-event-flag"
+                                            >
+                                                <Box
+                                                    component="span"
+                                                    className="timeline-event-flag-text"
+                                                >
+                                                    {eventItem.name}
+                                                </Box>
+                                            </Box>
+                                        );
+                                    })}
+                                </Box>
+                            </Box>
+                        );
+                    })}
                 </Box>
             </Box>
         </Box>
@@ -1458,11 +1744,15 @@ function getTimelineHeaderCellClassName(isSelectableDayCell, isSelectedDayCell) 
 }
 
 
-function getTaskBarClassName(isSelected, isDelayed, isTaskDragPreviewTarget) {
+function getTaskBarClassName(isSelected, isCut, isDelayed, isTaskDragPreviewTarget) {
     const classNames = ["task-bar"];
 
     if (isSelected) {
         classNames.push("task-bar-selected");
+    }
+
+    if (isCut) {
+        classNames.push("task-bar-cut");
     }
 
     if (isDelayed) {
@@ -1485,10 +1775,26 @@ function getDaySelectionMode(event) {
 }
 
 
+function getDefaultSelectionMode() {
+    return {
+        isMultiSelect: false,
+        isRangeSelect: false,
+    };
+}
+
+
 function getTaskSelectionMode(event) {
     return {
         isMultiSelect: event.ctrlKey || event.metaKey,
         isRangeSelect: event.shiftKey,
+    };
+}
+
+
+function getRectangleSelectionMode(event) {
+    return {
+        isMultiSelect: event.ctrlKey || event.metaKey,
+        isRangeSelect: false,
     };
 }
 
@@ -1541,6 +1847,101 @@ function getDayOffHighlights(dayOffs, tasks, metrics) {
 }
 
 
+function getReleaseEventGroups(tasks, metrics) {
+    const eventGroups = [];
+    const eventGroupMap = new Map();
+
+    tasks.forEach(function mapTaskToReleaseEvent(task) {
+        if (task.taskType !== RELEASE_TASK_TYPE) {
+            return;
+        }
+
+        const eventDate = parseDateString(task.startDate);
+
+        if (!isValidDate(eventDate)) {
+            return;
+        }
+
+        const eventCellLayout = getTimelineCellLayout(eventDate, metrics.gridCells);
+
+        if (!eventCellLayout) {
+            return;
+        }
+
+        let eventGroup = eventGroupMap.get(eventCellLayout.key);
+
+        if (!eventGroup) {
+            const markerLeft = eventCellLayout.left + eventCellLayout.width / 2;
+
+            eventGroup = {
+                key: eventCellLayout.key,
+                left: markerLeft,
+                columnType: getEventMarkerColumnTypeAtOffset(markerLeft, metrics),
+                events: [],
+            };
+            eventGroupMap.set(eventCellLayout.key, eventGroup);
+            eventGroups.push(eventGroup);
+        }
+
+        eventGroup.events.push({
+            id: task.id,
+            name: task.name,
+        });
+    });
+
+    return eventGroups;
+}
+
+
+function getEventMarkerColumnTypeAtOffset(markerLeft, metrics) {
+    if (isTimelineOffsetInTodayColumn(markerLeft, metrics)) {
+        return EVENT_MARKER_COLUMN_TODAY;
+    }
+
+    const markerDate = getTimelineDateAtOffset(markerLeft, metrics.gridCells).date;
+
+    if (shouldShowWeekendShadows(metrics) && isWeekendDate(markerDate)) {
+        return EVENT_MARKER_COLUMN_WEEKEND;
+    }
+
+    return EVENT_MARKER_COLUMN_NORMAL;
+}
+
+
+function getEventMarkerClassName(columnType) {
+    const classNames = ["timeline-event-marker"];
+
+    if (columnType === EVENT_MARKER_COLUMN_TODAY) {
+        classNames.push("timeline-event-marker-today");
+        return classNames.join(" ");
+    }
+
+    if (columnType === EVENT_MARKER_COLUMN_WEEKEND) {
+        classNames.push("timeline-event-marker-weekend");
+        return classNames.join(" ");
+    }
+
+    classNames.push("timeline-event-marker-normal");
+
+    return classNames.join(" ");
+}
+
+
+function isTimelineOffsetInTodayColumn(offset, metrics) {
+    if (!shouldShowTodayColumn(metrics)) {
+        return false;
+    }
+
+    const todayLayout = getDaySegmentLayout(metrics.todayDate, metrics.gridCells);
+
+    if (!todayLayout) {
+        return false;
+    }
+
+    return offset >= todayLayout.left && offset <= todayLayout.left + todayLayout.width;
+}
+
+
 function matchesDayOffAssignee(dayOff, task) {
     if (dayOff.assignees.includes(DAY_OFF_ALL_ASSIGNEES)) {
         return true;
@@ -1561,6 +1962,25 @@ function getDaySegmentLayout(date, gridCells) {
             return {
                 left: offset + dayOffset * dayWidth,
                 width: dayWidth,
+            };
+        }
+
+        offset += cell.width;
+    }
+
+    return null;
+}
+
+
+function getTimelineCellLayout(date, gridCells) {
+    let offset = 0;
+
+    for (const cell of gridCells) {
+        if (isDateInCell(date, cell)) {
+            return {
+                key: cell.key,
+                left: offset,
+                width: cell.width,
             };
         }
 
@@ -1680,6 +2100,31 @@ function getVisibleBodyRowCount(panelHeight, metrics) {
     const visibleBodyHeight = Math.max(0, panelHeight - metrics.headerHeight);
 
     return Math.ceil(visibleBodyHeight / metrics.rowHeight);
+}
+
+
+function getFixedEventBarLayout(panel) {
+    const panelRect = panel.getBoundingClientRect();
+
+    return {
+        bottom: EVENT_BAR_SCREEN_BOTTOM_OFFSET_PIXELS,
+        left: panelRect.left,
+        width: panel.clientWidth,
+    };
+}
+
+
+function hasSameFixedEventBarLayout(currentLayout, nextLayout) {
+    return (
+        currentLayout.bottom === nextLayout.bottom
+        && currentLayout.left === nextLayout.left
+        && currentLayout.width === nextLayout.width
+    );
+}
+
+
+function getFixedEventBarTrackWidth(eventBarWidth) {
+    return Math.max(0, eventBarWidth - EVENT_BAR_VIEWPORT_INSET_PIXELS * 2);
 }
 
 
@@ -1860,6 +2305,11 @@ function parseDateString(value) {
 }
 
 
+function isValidDate(date) {
+    return date instanceof Date && !Number.isNaN(date.getTime());
+}
+
+
 function formatDateString(date) {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -1910,11 +2360,6 @@ function isValidTaskDateRange(startDate, stopDate) {
 }
 
 
-function isValidDate(date) {
-    return date instanceof Date && !Number.isNaN(date.getTime());
-}
-
-
 function getTimelineHeaderRowHeight(headerHeight, headerRows) {
     const headerRowCount = Math.max(headerRows.length, MIN_TIMELINE_HEADER_ROW_COUNT);
 
@@ -1947,6 +2392,16 @@ function isTaskInteractionDrag(dragState) {
 }
 
 
+function isTimelinePanDrag(dragState) {
+    return dragState.type === TIMELINE_DRAG_TYPE_PAN;
+}
+
+
+function isRectangleSelectionDrag(dragState) {
+    return dragState.type === TIMELINE_DRAG_TYPE_RECTANGLE_SELECT;
+}
+
+
 function getTaskInteractionIds(tasks, selectedTaskIds, taskId) {
     if (!selectedTaskIds.includes(taskId)) {
         return [taskId];
@@ -1962,12 +2417,123 @@ function getTaskInteractionIds(tasks, selectedTaskIds, taskId) {
 }
 
 
+function getTimelineSelectionPoint(panel, event, timelineWidth, headerHeight, bodyHeight) {
+    const panelRect = panel.getBoundingClientRect();
+    const viewportX = event.clientX - panelRect.left;
+    const viewportY = event.clientY - panelRect.top;
+    const timelineX = panel.scrollLeft + viewportX;
+    const timelineY = panel.scrollTop + viewportY - headerHeight;
+
+    return {
+        x: getClampedValue(timelineX, 0, timelineWidth),
+        y: getClampedValue(timelineY, 0, bodyHeight),
+    };
+}
+
+
+function isTimelineScrollbarMouseDown(event, panel) {
+    const panelRect = panel.getBoundingClientRect();
+    const hasHorizontalScrollbar = panel.scrollWidth > panel.clientWidth;
+    const hasVerticalScrollbar = panel.scrollHeight > panel.clientHeight;
+    const isHorizontalScrollbarClick = (
+        hasHorizontalScrollbar
+        && event.clientY >= panelRect.top + panel.clientHeight
+    );
+    const isVerticalScrollbarClick = (
+        hasVerticalScrollbar
+        && event.clientX >= panelRect.left + panel.clientWidth
+    );
+
+    return isHorizontalScrollbarClick || isVerticalScrollbarClick;
+}
+
+
 function getTimelineDateAtPointer(panel, event, gridCells) {
     const panelRect = panel.getBoundingClientRect();
     const viewportOffset = event.clientX - panelRect.left;
     const timelineOffset = panel.scrollLeft + viewportOffset;
 
     return getTimelineDateAtOffset(timelineOffset, gridCells).date;
+}
+
+
+function getSelectionRectangle(startPoint, currentPoint) {
+    const left = Math.min(startPoint.x, currentPoint.x);
+    const top = Math.min(startPoint.y, currentPoint.y);
+    const right = Math.max(startPoint.x, currentPoint.x);
+    const bottom = Math.max(startPoint.y, currentPoint.y);
+
+    return {
+        left,
+        top,
+        width: right - left,
+        height: bottom - top,
+        right,
+        bottom,
+    };
+}
+
+
+function isLeftToRightSelection(startPoint, currentPoint) {
+    return currentPoint.x >= startPoint.x;
+}
+
+
+function getRectangleSelectedTaskIds(bars, rectangle, isFullContainmentSelection) {
+    return bars
+        .filter(function matchRectangleSelectedTask(bar) {
+            const taskBounds = getTaskBarSelectionBounds(bar);
+
+            if (isFullContainmentSelection) {
+                return isTaskBarFullyContained(taskBounds, rectangle);
+            }
+
+            return doesTaskBarIntersect(taskBounds, rectangle);
+        })
+        .map(function mapRectangleSelectedTaskId(bar) {
+            return bar.task.id;
+        });
+}
+
+
+function getTaskBarSelectionBounds(bar) {
+    const taskBarVisualLayout = getTaskBarVisualLayout({
+        left: bar.left,
+        top: bar.top,
+        width: bar.width,
+    });
+
+    return {
+        left: taskBarVisualLayout.left,
+        top: taskBarVisualLayout.top,
+        right: taskBarVisualLayout.left + taskBarVisualLayout.width,
+        bottom: taskBarVisualLayout.top + TASK_BAR_HEIGHT_PIXELS,
+    };
+}
+
+
+function isTaskBarFullyContained(taskBounds, rectangle) {
+    return (
+        taskBounds.left >= rectangle.left
+        && taskBounds.right <= rectangle.right
+        && taskBounds.top >= rectangle.top
+        && taskBounds.bottom <= rectangle.bottom
+    );
+}
+
+
+function doesTaskBarIntersect(taskBounds, rectangle) {
+    return (
+        taskBounds.left <= rectangle.right
+        && taskBounds.right >= rectangle.left
+        && taskBounds.top <= rectangle.bottom
+        && taskBounds.bottom >= rectangle.top
+    );
+}
+
+
+function getClampedValue(value, minimumValue, maximumValue) {
+    return Math.min(Math.max(value, minimumValue), maximumValue);
 }
 
 
@@ -2092,6 +2658,67 @@ function getTaskBarVisualLayout(taskBarLayout) {
             MIN_TASK_BAR_DISPLAY_WIDTH_PIXELS,
         ),
     };
+}
+
+
+function shouldShowTaskBarLabel(taskName, taskBarWidth, canResizeTask) {
+    return getTaskBarLabelWidth(taskName) <= getTaskBarLabelAvailableWidth(
+        taskBarWidth,
+        canResizeTask,
+    );
+}
+
+
+function getTaskBarLabelAvailableWidth(taskBarWidth, canResizeTask) {
+    const resizeHandleWidth = canResizeTask
+        ? TASK_BAR_RESIZE_HANDLE_WIDTH_PIXELS * 2
+        : 0;
+    const reservedWidth = (
+        TASK_BAR_LABEL_HORIZONTAL_PADDING_PIXELS * 2
+        + resizeHandleWidth
+    );
+
+    return Math.max(0, taskBarWidth - reservedWidth);
+}
+
+
+function getTaskBarLabelWidth(taskName) {
+    const cachedWidth = taskBarLabelWidthCache.get(taskName);
+
+    if (cachedWidth !== undefined) {
+        return cachedWidth;
+    }
+
+    const measureContext = getTaskBarLabelMeasureContext();
+
+    if (!measureContext) {
+        return Number.POSITIVE_INFINITY;
+    }
+
+    const measuredWidth = Math.ceil(measureContext.measureText(taskName).width);
+    taskBarLabelWidthCache.set(taskName, measuredWidth);
+
+    return measuredWidth;
+}
+
+
+function getTaskBarLabelMeasureContext() {
+    if (taskBarLabelMeasureContext) {
+        return taskBarLabelMeasureContext;
+    }
+
+    if (typeof document === "undefined") {
+        return null;
+    }
+
+    const canvas = document.createElement("canvas");
+    taskBarLabelMeasureContext = canvas.getContext("2d");
+
+    if (taskBarLabelMeasureContext) {
+        taskBarLabelMeasureContext.font = TASK_BAR_LABEL_FONT;
+    }
+
+    return taskBarLabelMeasureContext;
 }
 
 

@@ -21,6 +21,13 @@
     --planner-day-off-highlight-color: rgba(210, 15, 57, 0.24);
     --planner-bubble-background: rgba(239, 241, 245, 0.96);
     --planner-bubble-shadow: rgba(76, 79, 105, 0.22);
+    --planner-selection-rectangle-border-color: rgba(30, 102, 245, 0.78);
+    --planner-selection-rectangle-fill-color: rgba(30, 102, 245, 0.16);
+    --planner-event-bar-color: #8590a5ea;
+    --planner-event-marker-text-color: #131c2293;
+    --planner-event-shadow-color: rgba(76, 79, 105, 0.36);
+    --planner-event-flag-background-color: rgba(248, 249, 253, 0.842);
+    --planner-event-flag-text-color: #4c4f69;
 
     color: var(--planner-text-color);
     background: var(--planner-app-background);
@@ -53,6 +60,13 @@
     --planner-day-off-highlight-color: rgba(237, 135, 150, 0.3);
     --planner-bubble-background: rgba(30, 32, 48, 0.96);
     --planner-bubble-shadow: rgba(24, 25, 38, 0.58);
+    --planner-selection-rectangle-border-color: rgba(138, 173, 244, 0.82);
+    --planner-selection-rectangle-fill-color: rgba(138, 173, 244, 0.2);
+    --planner-event-bar-color: #1a315f;
+    --planner-event-marker-text-color: #ffffffa4;
+    --planner-event-shadow-color: rgba(0, 0, 0, 0.54);
+    --planner-event-flag-background-color: #5b6078;
+    --planner-event-flag-text-color: #ffffff;
 }
 
 * {
@@ -454,7 +468,7 @@ body.task-list-resizing {
     min-width: 0;
     overflow: auto;
     background: var(--planner-panel-color);
-    cursor: grab;
+    cursor: crosshair;
     overscroll-behavior: contain;
     user-select: none;
 }
@@ -531,7 +545,8 @@ body.task-list-resizing {
 .timeline-day-off-highlights,
 .timeline-selected-day-highlights,
 .timeline-rows,
-.timeline-bars {
+.timeline-bars,
+.timeline-selection-layer {
     position: absolute;
     left: 0;
 }
@@ -628,6 +643,153 @@ body.task-list-resizing {
     z-index: 5;
 }
 
+.timeline-selection-layer {
+    z-index: 7;
+    right: 0;
+    bottom: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.timeline-selection-rectangle {
+    position: absolute;
+    border: 1px solid var(--planner-selection-rectangle-border-color);
+    background: var(--planner-selection-rectangle-fill-color);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
+.timeline-event-bar {
+    position: fixed;
+    z-index: 8;
+    overflow: visible;
+    clip-path: inset(-100vh 0 -100vh 0);
+    --timeline-event-bar-center-y: 51px;
+    --timeline-event-bar-height: 15px;
+    --timeline-event-bar-half-height: 9px;
+    --timeline-event-bar-chevron-depth: 9px;
+    --timeline-event-marker-spacer-size: 3px;
+    --timeline-event-marker-spacer-total-size: 6px;
+    background: transparent;
+    pointer-events: none;
+}
+
+.timeline-event-bar-track {
+    position: absolute;
+    top: calc(var(--timeline-event-bar-center-y) - var(--timeline-event-bar-half-height));
+    height: var(--timeline-event-bar-height);
+    filter:
+        drop-shadow(0 2px 3px var(--planner-event-shadow-color))
+        drop-shadow(0 7px 30px var(--planner-event-shadow-color));
+    pointer-events: none
+}
+
+.timeline-event-bar-track::before {
+    position: absolute;
+    inset: 0;
+    background: var(--planner-event-bar-color);
+    clip-path: polygon(
+        0 0,
+        calc(100% - var(--timeline-event-bar-chevron-depth)) 0,
+        100% 50%,
+        calc(100% - var(--timeline-event-bar-chevron-depth)) 100%,
+        0 100%,
+        var(--timeline-event-bar-chevron-depth) 50%
+    );
+    content: "";
+}
+
+.timeline-event-marker {
+    position: absolute;
+    top: var(--timeline-event-bar-center-y);
+    width: var(--timeline-event-marker-size, 40px);
+    height: var(--timeline-event-marker-size, 40px);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+}
+
+.timeline-event-marker-normal {
+    background: var(--planner-panel-color);
+}
+
+.timeline-event-marker-weekend {
+    background:
+        linear-gradient(var(--planner-weekend-shadow-color), var(--planner-weekend-shadow-color)),
+        var(--planner-panel-color);
+}
+
+.timeline-event-marker-today {
+    background:
+        linear-gradient(var(--planner-today-highlight-color), var(--planner-today-highlight-color)),
+        var(--planner-panel-color);
+}
+
+.timeline-event-count {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(100% - var(--timeline-event-marker-spacer-total-size));
+    height: calc(100% - var(--timeline-event-marker-spacer-total-size));
+    margin: var(--timeline-event-marker-spacer-size);
+    border-radius: 50%;
+    background: var(--planner-event-bar-color);
+    color: var(--planner-event-marker-text-color);
+    font-size: 1rem;
+    font-weight: 800;
+    line-height: 1;
+    box-shadow: 0 4px 10px var(--planner-event-shadow-color);
+}
+
+.timeline-event-flags {
+    position: absolute;
+    bottom: calc(var(--timeline-event-marker-size, 40px) + 8px);
+    left: 50%;
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 120px;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-18px);
+}
+
+.timeline-event-marker:hover .timeline-event-flags,
+.timeline-event-marker:focus-within .timeline-event-flags {
+    opacity: 1;
+}
+
+.timeline-event-flag {
+    position: relative;
+    max-width: 220px;
+    min-height: 28px;
+    overflow: visible;
+    padding: 7px 24px 7px 10px;
+    background: transparent;
+    color: var(--planner-event-flag-text-color);
+    filter: drop-shadow(0 6px 14px var(--planner-event-shadow-color));
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.timeline-event-flag::before {
+    position: absolute;
+    inset: 0;
+    background: var(--planner-event-flag-background-color);
+    clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 50%, calc(100% - 18px) 100%, 0 100%);
+    content: "";
+}
+
+.timeline-event-flag-text {
+    position: relative;
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .task-bar {
     position: absolute;
     display: flex;
@@ -650,6 +812,11 @@ body.task-list-resizing {
 
 .task-bar-drag-preview {
     will-change: transform, left, width;
+}
+
+.task-bar-cut {
+    opacity: 0.42;
+    filter: grayscale(0.35);
 }
 
 .task-bar:hover,
@@ -688,8 +855,28 @@ body.task-list-resizing {
     top: 0;
     bottom: 0;
     z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 10px;
+    color: rgba(0, 0, 0, 0.38);
     cursor: ew-resize;
+}
+
+.task-bar-resize-handle::before {
+    content: "";
+    display: block;
+    width: 3px;
+    height: 14px;
+    background-image: radial-gradient(
+        circle,
+        currentColor 1.2px,
+        transparent 1.4px
+    );
+    background-repeat: repeat-y;
+    background-position: center top;
+    background-size: 3px 5px;
+    filter: drop-shadow(0 1px 1px rgba(255, 255, 255, 0.2));
 }
 
 .task-bar-resize-handle-left {
@@ -710,7 +897,7 @@ body.task-list-resizing {
     font-weight: 700;
     line-height: 1;
     text-align: center;
-    text-overflow: ellipsis;
+    text-overflow: clip;
     white-space: nowrap;
 }
 

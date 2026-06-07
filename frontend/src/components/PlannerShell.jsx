@@ -64,7 +64,9 @@ export default function PlannerShell(props) {
         canUndo,
         canEditSelectedTask,
         canCopySelectedTasks,
+        canCutSelectedTasks,
         canPasteCopiedTasks,
+        cutTaskIds,
         drawerMode,
         dayOffDrawerMode,
         dayOffInitialValues,
@@ -81,6 +83,7 @@ export default function PlannerShell(props) {
         onClearSelection,
         onCreateTask,
         onCopySelectedTasks,
+        onCutSelectedTasks,
         onDeleteSelectedTask,
         onDrawerClose,
         onEditSelectedTask,
@@ -92,6 +95,7 @@ export default function PlannerShell(props) {
         onRedoTaskChange,
         onResizeTaskDates,
         onSelectTask,
+        onSelectTasks,
         onSelectDayOffDate,
         onSettingsClick,
         onSettingsDrawerClose,
@@ -417,6 +421,7 @@ export default function PlannerShell(props) {
                 isTaskListCollapsed={isEffectiveTaskListCollapsed}
                 canEditSelectedTask={canEditSelectedTask}
                 canCopySelectedTasks={canCopySelectedTasks}
+                canCutSelectedTasks={canCutSelectedTasks}
                 canPasteCopiedTasks={canPasteCopiedTasks}
                 canRedo={canRedo}
                 canUndo={canUndo}
@@ -424,6 +429,7 @@ export default function PlannerShell(props) {
                 zoomMode={zoomMode}
                 onAddTaskClick={onAddTaskClick}
                 onCopySelectedTasks={onCopySelectedTasks}
+                onCutSelectedTasks={onCutSelectedTasks}
                 onDayOffActionClick={onDayOffActionClick}
                 onDeleteSelectedTask={onDeleteSelectedTask}
                 onEditSelectedTask={onEditSelectedTask}
@@ -473,6 +479,7 @@ export default function PlannerShell(props) {
                     panelRef={timelinePanelRef}
                     tasks={displayedTasks}
                     dayOffs={dayOffs}
+                    cutTaskIds={cutTaskIds}
                     highlightedTaskId={timelineHighlightedTaskId}
                     isLoading={isLoading}
                     isRowReorderDisabled={isTaskViewFilteredOrSorted}
@@ -481,7 +488,6 @@ export default function PlannerShell(props) {
                     showTimelineHorizontalGridLines={showTimelineHorizontalGridLines}
                     zoomIndex={zoomIndex}
                     onClearHighlight={handleClearTaskHighlight}
-                    onClearSelection={onClearSelection}
                     onHighlightTask={handleTaskHighlight}
                     onMoveTasks={onMoveTasks}
                     onOpenTaskEdit={onOpenTaskEdit}
@@ -489,6 +495,7 @@ export default function PlannerShell(props) {
                     onPanelScroll={handleTimelineScroll}
                     onResizeTaskDates={onResizeTaskDates}
                     onSelectTask={onSelectTask}
+                    onSelectTasks={onSelectTasks}
                     onSelectDayOffDate={onSelectDayOffDate}
                     onTimelineZoom={onTimelineZoom}
                 />

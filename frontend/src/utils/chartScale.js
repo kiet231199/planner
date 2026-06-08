@@ -6,7 +6,8 @@ const GENERATED_YEAR_MODE_FUTURE_YEARS = 20;
 const YEAR_MODE_SCROLL_BUFFER_YEARS = 4;
 const TASK_RANGE_PADDING_DAYS = 30;
 const MIN_BAR_WIDTH_PIXELS = 28;
-const ROW_HEIGHT_PIXELS = 38;
+export const ROW_HEIGHT_PIXELS = 38;
+export const RESERVED_EMPTY_ROW_COUNT = 10;
 const TIMELINE_HEADER_ROW_HEIGHT_PIXELS = 38;
 const TIMELINE_HEADER_ROW_COUNT = 2;
 const TIMELINE_HEADER_HEIGHT_PIXELS = (
@@ -147,6 +148,32 @@ export function getDurationDays(task) {
 
 export function getTimelineHeaderHeight() {
     return TIMELINE_HEADER_HEIGHT_PIXELS;
+}
+
+
+// Single source of truth shared by both the task list and the timeline panels so their
+// scrollable heights are identical and the rows can never drift out of alignment.
+export function getTimelineBodyRowCount(
+    taskCount,
+    panelHeight,
+    headerHeight,
+    rowHeight = ROW_HEIGHT_PIXELS,
+) {
+    const visibleBodyHeight = Math.max(0, panelHeight - headerHeight);
+    const viewportFillRowCount = Math.ceil(visibleBodyHeight / rowHeight);
+    const baselineRowCount = Math.max(taskCount, viewportFillRowCount);
+
+    return baselineRowCount + RESERVED_EMPTY_ROW_COUNT;
+}
+
+
+export function getTimelineBodyHeight(
+    taskCount,
+    panelHeight,
+    headerHeight,
+    rowHeight = ROW_HEIGHT_PIXELS,
+) {
+    return getTimelineBodyRowCount(taskCount, panelHeight, headerHeight, rowHeight) * rowHeight;
 }
 
 

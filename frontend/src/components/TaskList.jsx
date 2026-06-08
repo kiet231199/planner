@@ -16,6 +16,8 @@ import {
     Typography,
 } from "@mui/material";
 
+import { ROW_HEIGHT_PIXELS, getTimelineBodyRowCount } from "../utils/chartScale";
+
 
 const UNASSIGNED_ASSIGNEE_LABEL = "Unassigned";
 const EMPTY_ASSIGNEE_LABEL = "";
@@ -58,11 +60,38 @@ export default function TaskList(props) {
         onSelectTask,
     } = props;
     const [filterAnchorElement, setFilterAnchorElement] = useState(null);
+    const [panelHeight, setPanelHeight] = useState(0);
     const isFilterMenuOpen = Boolean(filterAnchorElement);
     const isAssigneeFilterActive = selectedAssigneeFilters.length > 0;
     const assigneeColorMap = useMemo(function memoizeAssigneeColorMap() {
         return getAssigneeColorMap(assignees);
     }, [assignees]);
+    const bodyRowCount = getTimelineBodyRowCount(
+        tasks.length,
+        panelHeight,
+        headerHeight,
+        ROW_HEIGHT_PIXELS,
+    );
+    const fillerRowHeight = Math.max(0, bodyRowCount - tasks.length) * ROW_HEIGHT_PIXELS;
+
+    useEffect(function measureTaskListPanelHeight() {
+        const panel = panelRef.current;
+
+        if (!panel || typeof ResizeObserver === "undefined") {
+            return undefined;
+        }
+
+        const resizeObserver = new ResizeObserver(function handlePanelResize() {
+            setPanelHeight(panel.clientHeight);
+        });
+
+        setPanelHeight(panel.clientHeight);
+        resizeObserver.observe(panel);
+
+        return function disconnectResizeObserver() {
+            resizeObserver.disconnect();
+        };
+    }, [panelRef, isCollapsed]);
 
     useEffect(function closeFilterMenuAfterCollapse() {
         if (!isCollapsed) {
@@ -278,6 +307,13 @@ export default function TaskList(props) {
                     );
                 })}
             </List>
+            {fillerRowHeight > 0 && (
+                <Box
+                    className="task-list-filler"
+                    aria-hidden="true"
+                    sx={{ height: `${fillerRowHeight}px` }}
+                />
+            )}
             <Box
                 className="task-list-resize-handle"
                 role="separator"

@@ -4,6 +4,7 @@ import { Box, Typography } from "@mui/material";
 import {
     getDateDeltaDays,
     getDurationDays,
+    getTimelineBodyRowCount,
     getTimelineDateAtOffset,
     getTimelineOffsetForDate,
     getTimelineScaleMetrics,
@@ -21,7 +22,6 @@ const LEFT_MOUSE_BUTTON = 0;
 const RIGHT_MOUSE_BUTTON = 2;
 const MIN_RESIZE_PREVIEW_WIDTH_PIXELS = 28;
 const MIN_TIMELINE_HEADER_ROW_COUNT = 1;
-const MIN_TIMELINE_BODY_ROW_COUNT = 1;
 const TIMELINE_GRID_LINE_WIDTH_PIXELS = 1;
 const TIMELINE_TODAY_LINE_WIDTH_PIXELS = 2;
 const TIMELINE_PAN_MOVED_THRESHOLD_PIXELS = 1;
@@ -169,14 +169,14 @@ export default function TimelineChart(props) {
     const cutTaskIdSet = useMemo(function memoizeCutTaskIdSet() {
         return new Set(cutTaskIds);
     }, [cutTaskIds]);
-    const visibleBodyRowCount = useMemo(function memoizeVisibleBodyRowCount() {
-        return getVisibleBodyRowCount(panelHeight, metrics);
-    }, [metrics, panelHeight]);
-    const timelineBodyRowCount = Math.max(
-        tasks.length,
-        visibleBodyRowCount,
-        MIN_TIMELINE_BODY_ROW_COUNT,
-    );
+    const timelineBodyRowCount = useMemo(function memoizeTimelineBodyRowCount() {
+        return getTimelineBodyRowCount(
+            tasks.length,
+            panelHeight,
+            metrics.headerHeight,
+            metrics.rowHeight,
+        );
+    }, [metrics, panelHeight, tasks.length]);
     const timelineBackground = useMemo(function memoizeTimelineBackground() {
         return getTimelineBackground(scaleMetrics, timelineBodyRowCount);
     }, [scaleMetrics, timelineBodyRowCount]);
@@ -2093,13 +2093,6 @@ function getTimelineGridPaths(gridCells, rowCount, rowHeight) {
         horizontalGridPath: horizontalPathCommands.join(" "),
         verticalGridPath: verticalPathCommands.join(" "),
     };
-}
-
-
-function getVisibleBodyRowCount(panelHeight, metrics) {
-    const visibleBodyHeight = Math.max(0, panelHeight - metrics.headerHeight);
-
-    return Math.ceil(visibleBodyHeight / metrics.rowHeight);
 }
 
 

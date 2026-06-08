@@ -307,9 +307,15 @@ body.task-list-resizing {
     z-index: 5;
     min-width: 0;
     overflow: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
     border-right: 1px solid var(--planner-border-color);
     background-color: var(--planner-panel-color);
     box-shadow: 10px 0 14px -10px var(--planner-sticky-column-shadow-color);
+}
+
+.task-list-panel::-webkit-scrollbar {
+    display: none;
 }
 
 .task-list-panel-collapsed {

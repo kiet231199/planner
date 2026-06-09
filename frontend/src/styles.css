@@ -189,6 +189,10 @@ body.task-list-resizing {
     font-size: 0.82rem !important;
 }
 
+.view-menu-item-icon {
+    min-width: 34px !important;
+}
+
 .task-toolbar {
     grid-column: 2;
     grid-row: 1;
@@ -306,16 +310,12 @@ body.task-list-resizing {
     position: relative;
     z-index: 5;
     min-width: 0;
-    overflow: auto;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
+    overflow-x: auto;
+    overflow-y: hidden;
     border-right: 1px solid var(--planner-border-color);
     background-color: var(--planner-panel-color);
     box-shadow: 10px 0 14px -10px var(--planner-sticky-column-shadow-color);
-}
-
-.task-list-panel::-webkit-scrollbar {
-    display: none;
+    overscroll-behavior: contain;
 }
 
 .task-list-panel-collapsed {
@@ -325,12 +325,25 @@ body.task-list-resizing {
     pointer-events: none;
 }
 
+.task-list-scroll-surface {
+    width: 100%;
+    height: 100%;
+    overflow-x: visible;
+    overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.task-list-scroll-surface::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
 .task-list-header {
     position: sticky;
     top: 0;
     z-index: 4;
     display: grid;
-    grid-template-columns: minmax(124px, 1fr) var(--planner-assignee-column-width);
     align-items: center;
     height: 38px;
     border-bottom: 1px solid var(--planner-border-color);
@@ -339,12 +352,13 @@ body.task-list-resizing {
 }
 
 .task-list-header .task-list-heading {
+    justify-content: center;
     overflow: hidden;
     font-size: var(--planner-task-text-size);
     font-weight: 700;
     color: var(--planner-muted-text-color);
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    text-align: center;
+    white-space: normal;
 }
 
 .task-list-cell {
@@ -362,7 +376,6 @@ body.task-list-resizing {
 
 .task-list-row {
     display: grid !important;
-    grid-template-columns: minmax(124px, 1fr) var(--planner-assignee-column-width);
     height: var(--planner-task-row-height);
     min-height: 38px !important;
     padding: 0 !important;
@@ -387,19 +400,22 @@ body.task-list-resizing {
     gap: 8px;
 }
 
-.task-list-assignee-heading {
+.task-list-sortable-heading {
     gap: 4px;
     cursor: pointer;
+    justify-content: center;
     user-select: none;
 }
 
 .task-list-heading-label {
     min-width: 0;
-    overflow: hidden;
+    overflow: visible;
     font-size: var(--planner-task-text-size) !important;
     font-weight: 700 !important;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: 1.1 !important;
+    text-align: center;
+    text-overflow: clip;
+    white-space: normal;
 }
 
 .task-list-sort-icon {
@@ -411,7 +427,7 @@ body.task-list-resizing {
     flex: 0 0 auto;
     width: 28px;
     height: 28px;
-    margin-left: auto !important;
+    margin-left: 0 !important;
 }
 
 .task-assignee-avatar {
@@ -433,11 +449,11 @@ body.task-list-resizing {
     white-space: nowrap;
 }
 
-.task-list-assignee-cell {
+.task-list-value-cell {
     justify-content: flex-start;
 }
 
-.task-list-row .task-list-assignee {
+.task-list-row .task-list-value {
     min-width: 0;
     overflow: hidden;
     font-size: var(--planner-task-text-size);
@@ -448,6 +464,14 @@ body.task-list-resizing {
 
 .task-list-filter-menu .MuiListItemText-primary {
     font-size: 0.86rem;
+}
+
+.task-list-column-menu .MuiListItemText-primary {
+    font-size: 0.86rem;
+}
+
+.task-list-column-menu-item-hidden {
+    opacity: 0.45;
 }
 
 .task-list-resize-handle {
@@ -926,12 +950,19 @@ body.task-list-resizing {
 }
 
 .task-hover-bubble-title {
+    display: -webkit-box;
     overflow: hidden;
-    padding-bottom: 8px;
+    max-width: 30ch;
+    margin-bottom: 8px !important;
     font-size: 0.88rem !important;
     font-weight: 700 !important;
+    line-height: 1.25 !important;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow-wrap: break-word;
     text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
 }
 
 .task-hover-bubble-grid {
@@ -960,27 +991,18 @@ body.task-list-resizing {
 }
 
 .task-drawer-paper,
-.day-off-drawer-paper,
-.settings-drawer-paper {
+.day-off-drawer-paper {
     width: min(440px, 100vw);
 }
 
 .task-drawer-header,
-.day-off-drawer-header,
-.settings-drawer-header {
+.day-off-drawer-header {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 16px;
     padding: 20px 20px 12px;
     border-bottom: 1px solid var(--planner-border-color);
-}
-
-.settings-drawer-content {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding: 20px;
 }
 
 .task-form,
@@ -1046,6 +1068,11 @@ body.task-list-resizing {
     height: 36px;
 }
 
+.name-color-manager-dialog-paper {
+    background-color: var(--planner-toolbar-panel-color) !important;
+    background-image: none !important;
+}
+
 .assignee-manager-content {
     display: flex;
     flex-direction: column;
@@ -1060,6 +1087,10 @@ body.task-list-resizing {
 
 .assignee-manager-table {
     table-layout: fixed;
+}
+
+.assignee-manager-table .MuiTableCell-root {
+    border-bottom: 0;
 }
 
 .assignee-selection-cell {

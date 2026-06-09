@@ -1,6 +1,7 @@
 export const UNASSIGNED_ASSIGNEE = "Unassigned";
 
 export const DAY_OFF_ALL_ASSIGNEES = "All";
+export const NO_PROJECT_NAME = "...";
 
 export const ASSIGNEE_OPTIONS = [UNASSIGNED_ASSIGNEE, "Alice", "Bob", "Charlie"];
 

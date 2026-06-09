@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, LinearProgress } from "@mui/material";
 
 import DayOffDrawer from "./DayOffDrawer";
-import SettingsDrawer from "./SettingsDrawer";
 import TaskDrawer from "./TaskDrawer";
 import TaskList from "./TaskList";
 import TaskToolbar from "./TaskToolbar";
@@ -13,34 +12,44 @@ import {
     getTimelineOffsetForDate,
     getTimelineScaleMetrics,
 } from "../utils/chartScale";
+import {
+    TASK_LIST_COLUMNS,
+    TASK_LIST_COLUMN_VISIBILITY_STORAGE_KEY,
+    TASK_LIST_SORT_ASCENDING,
+    TASK_LIST_SORT_DESCENDING,
+    TASK_LIST_SORT_NONE,
+    getDefaultTaskListColumnVisibility,
+    getTaskListColumn,
+    getTaskListColumnsMinimumWidth,
+    getTaskListColumnValue,
+} from "../utils/taskListColumns";
 
 
 const TASK_LIST_WIDTH_STORAGE_KEY = "planner-task-list-width";
-const DEFAULT_TASK_LIST_WIDTH_PIXELS = 280;
-const MIN_TASK_LIST_WIDTH_PIXELS = 260;
-const MAX_TASK_LIST_WIDTH_PIXELS = 560;
+const DEFAULT_TASK_LIST_WIDTH_PIXELS = 360;
+const MIN_TASK_LIST_WIDTH_PIXELS = 360;
+const MAX_STORED_TASK_LIST_WIDTH_PIXELS = 1200;
+const MAX_TASK_LIST_SCREEN_WIDTH_RATIO = 0.5;
 const COMPACT_LAYOUT_MAX_WIDTH_PIXELS = 900;
 const SHORT_VIEWPORT_MAX_HEIGHT_PIXELS = 560;
 const TOOLBAR_PANEL_WIDTH_PIXELS = 56;
-const MIN_TIMELINE_WIDTH_PIXELS = 360;
 const COMPACT_TASK_LIST_WIDTH_PIXELS = 240;
 const COMPACT_MIN_TASK_LIST_WIDTH_PIXELS = 180;
 const COMPACT_MIN_TIMELINE_WIDTH_PIXELS = 240;
 const DRAG_MOUSE_BUTTON = 0;
 const SCROLL_SYNC_TOLERANCE_PIXELS = 1;
 const TIMELINE_SCROLL_BEHAVIOR = "smooth";
-const UNASSIGNED_ASSIGNEE_LABEL = "Unassigned";
-const EMPTY_ASSIGNEE_LABEL = "";
-const ASSIGNEE_SORT_NONE = "none";
-const ASSIGNEE_SORT_ASCENDING = "ascending";
-const ASSIGNEE_SORT_DESCENDING = "descending";
-const ASSIGNEE_COLLATOR = new Intl.Collator(undefined, {
+const TASK_LIST_COLLATOR = new Intl.Collator(undefined, {
     numeric: true,
     sensitivity: "base",
 });
 const EMPTY_SHELL_SIZE = {
     width: 0,
     height: 0,
+};
+const EMPTY_TASK_LIST_SORT = {
+    columnId: null,
+    direction: TASK_LIST_SORT_NONE,
 };
 
 
@@ -49,6 +58,7 @@ export default function PlannerShell(props) {
         tasks,
         dayOffs,
         assignees,
+        projectNames,
         selectedTaskId,
         selectedTaskIds,
         selectedDayOffDates,
@@ -56,10 +66,10 @@ export default function PlannerShell(props) {
         selectedTasks,
         isDrawerOpen,
         isDayOffDrawerOpen,
-        isSettingsDrawerOpen,
         isLoading,
         isSaving,
         isAssigneeSaving,
+        isProjectSaving,
         canRedo,
         canUndo,
         canEditSelectedTask,
@@ -79,6 +89,7 @@ export default function PlannerShell(props) {
         onDayOffActionClick,
         onDayOffDrawerClose,
         onSaveAssignees,
+        onSaveProjectNames,
         onColorModeToggle,
         onClearSelection,
         onCreateTask,
@@ -97,8 +108,6 @@ export default function PlannerShell(props) {
         onSelectTask,
         onSelectTasks,
         onSelectDayOffDate,
-        onSettingsClick,
-        onSettingsDrawerClose,
         onUndoTaskChange,
         onUpdateTask,
         onUpdateTasks,
@@ -112,27 +121,36 @@ export default function PlannerShell(props) {
     const [isTaskListCollapsed, setIsTaskListCollapsed] = useState(false);
     const [isCompactTaskListCollapsed, setIsCompactTaskListCollapsed] = useState(true);
     const [shellSize, setShellSize] = useState(getInitialShellSize);
-    const [selectedAssigneeFilters, setSelectedAssigneeFilters] = useState([]);
-    const [assigneeSortDirection, setAssigneeSortDirection] = useState(ASSIGNEE_SORT_NONE);
+    const [
+        taskListColumnVisibility,
+        setTaskListColumnVisibility,
+    ] = useState(getInitialTaskListColumnVisibility);
+    const [selectedTaskListFilters, setSelectedTaskListFilters] = useState({});
+    const [taskListSort, setTaskListSort] = useState(EMPTY_TASK_LIST_SORT);
     const [highlightedTaskId, setHighlightedTaskId] = useState(null);
     const isSyncingScrollRef = useRef(false);
     const shellRef = useRef(null);
     const shellResizeFrameIdRef = useRef(null);
+    const plannerContentRef = useRef(null);
     const taskListPanelRef = useRef(null);
+    const taskListResizeFrameIdRef = useRef(null);
     const taskListResizeStateRef = useRef(null);
     const timelineModeZoomAnchorRef = useRef(null);
     const timelinePanelRef = useRef(null);
     const wasCompactLayoutRef = useRef(false);
     const timelineHeaderHeight = getTimelineHeaderHeight(zoomIndex);
-    const assigneeFilterOptions = useMemo(function memoizeAssigneeFilterOptions() {
-        return getAssigneeFilterOptions(tasks);
-    }, [tasks]);
+    const visibleTaskListColumns = useMemo(function memoizeVisibleTaskListColumns() {
+        return getVisibleTaskListColumns(taskListColumnVisibility);
+    }, [taskListColumnVisibility]);
+    const taskListFilterOptions = useMemo(function memoizeTaskListFilterOptions() {
+        return getFilterOptionsByColumn(tasks, visibleTaskListColumns);
+    }, [tasks, visibleTaskListColumns]);
     const displayedTasks = useMemo(function memoizeDisplayedTasks() {
-        return getDisplayedTasks(tasks, selectedAssigneeFilters, assigneeSortDirection);
-    }, [tasks, selectedAssigneeFilters, assigneeSortDirection]);
+        return getDisplayedTasks(tasks, selectedTaskListFilters, taskListSort);
+    }, [tasks, selectedTaskListFilters, taskListSort]);
     const isTaskViewFilteredOrSorted = (
-        selectedAssigneeFilters.length > 0
-        || assigneeSortDirection !== ASSIGNEE_SORT_NONE
+        hasActiveTaskListFilters(selectedTaskListFilters)
+        || taskListSort.direction !== TASK_LIST_SORT_NONE
     );
     const isCompactLayout = isCompactPlannerLayout(shellSize.width);
     const isShortViewport = isShortPlannerViewport(shellSize.height);
@@ -233,6 +251,32 @@ export default function PlannerShell(props) {
     }, [displayedTasks, zoomIndex]);
 
     useEffect(function bindTaskListResizeListeners() {
+        function applyPendingTaskListWidth() {
+            const resizeState = taskListResizeStateRef.current;
+
+            taskListResizeFrameIdRef.current = null;
+
+            if (!resizeState) {
+                return;
+            }
+
+            applyTaskListContentWidth(plannerContentRef.current, resizeState.pendingWidth);
+        }
+
+        function scheduleTaskListWidthUpdate(nextWidth) {
+            const resizeState = taskListResizeStateRef.current;
+
+            resizeState.pendingWidth = nextWidth;
+
+            if (taskListResizeFrameIdRef.current !== null) {
+                return;
+            }
+
+            taskListResizeFrameIdRef.current = window.requestAnimationFrame(
+                applyPendingTaskListWidth,
+            );
+        }
+
         function handleMouseMove(event) {
             const resizeState = taskListResizeStateRef.current;
 
@@ -241,10 +285,13 @@ export default function PlannerShell(props) {
             }
 
             const widthDelta = event.clientX - resizeState.startClientX;
-            const nextWidth = getClampedTaskListWidth(resizeState.startWidth + widthDelta);
+            const nextWidth = getClampedTaskListWidth(
+                resizeState.startWidth + widthDelta,
+                resizeState.maximumWidth,
+            );
 
             resizeState.currentWidth = nextWidth;
-            setTaskListWidth(nextWidth);
+            scheduleTaskListWidthUpdate(nextWidth);
         }
 
         function handleMouseUp() {
@@ -254,9 +301,10 @@ export default function PlannerShell(props) {
                 return;
             }
 
+            applyTaskListContentWidth(plannerContentRef.current, resizeState.currentWidth);
+            setTaskListWidth(resizeState.currentWidth);
             saveTaskListWidth(resizeState.currentWidth);
-            taskListResizeStateRef.current = null;
-            document.body.classList.remove("task-list-resizing");
+            finishTaskListResize();
         }
 
         window.addEventListener("mousemove", handleMouseMove);
@@ -265,9 +313,39 @@ export default function PlannerShell(props) {
         return function removeTaskListResizeListeners() {
             window.removeEventListener("mousemove", handleMouseMove);
             window.removeEventListener("mouseup", handleMouseUp);
-            document.body.classList.remove("task-list-resizing");
+            finishTaskListResize();
         };
     }, []);
+
+    useEffect(function persistTaskListColumnVisibility() {
+        saveTaskListColumnVisibility(taskListColumnVisibility);
+
+        setSelectedTaskListFilters(function clearHiddenColumnFilters(currentFilters) {
+            const nextFilters = Object.fromEntries(
+                Object.entries(currentFilters).filter(function keepVisibleFilter([columnId]) {
+                    return taskListColumnVisibility[columnId];
+                }),
+            );
+
+            if (hasSameFilterState(currentFilters, nextFilters)) {
+                return currentFilters;
+            }
+
+            return nextFilters;
+        });
+
+        setTaskListSort(function clearHiddenColumnSort(currentSort) {
+            if (
+                !currentSort.columnId
+                || currentSort.direction === TASK_LIST_SORT_NONE
+                || taskListColumnVisibility[currentSort.columnId]
+            ) {
+                return currentSort;
+            }
+
+            return EMPTY_TASK_LIST_SORT;
+        });
+    }, [taskListColumnVisibility]);
 
     function handleTaskListResizeStart(event) {
         if (isCompactLayout || isEffectiveTaskListCollapsed) {
@@ -282,8 +360,10 @@ export default function PlannerShell(props) {
 
         taskListResizeStateRef.current = {
             startClientX: event.clientX,
-            startWidth: taskListWidth,
-            currentWidth: taskListWidth,
+            startWidth: taskListColumnWidth,
+            currentWidth: taskListColumnWidth,
+            pendingWidth: taskListColumnWidth,
+            maximumWidth: getMaximumDesktopTaskListWidth(shellSize.width),
         };
         document.body.classList.add("task-list-resizing");
     }
@@ -360,26 +440,123 @@ export default function PlannerShell(props) {
         });
     }
 
-    function handleAssigneeFilterToggle(assigneeLabel) {
-        setSelectedAssigneeFilters(function updateSelectedAssigneeFilters(currentFilters) {
-            if (currentFilters.includes(assigneeLabel)) {
-                return currentFilters.filter(function keepOtherAssigneeFilter(currentFilter) {
-                    return currentFilter !== assigneeLabel;
+    function handleTaskListFilterToggle(columnId, filterValue) {
+        setSelectedTaskListFilters(function updateSelectedFilters(currentFilters) {
+            const currentColumnFilters = currentFilters[columnId] || [];
+
+            if (currentColumnFilters.includes(filterValue)) {
+                const nextColumnFilters = currentColumnFilters.filter(function keepOtherFilter(
+                    currentFilter,
+                ) {
+                    return currentFilter !== filterValue;
                 });
+
+                if (nextColumnFilters.length === 0) {
+                    const {
+                        [columnId]: _removedColumnFilters,
+                        ...nextFilters
+                    } = currentFilters;
+
+                    return nextFilters;
+                }
+
+                return {
+                    ...currentFilters,
+                    [columnId]: nextColumnFilters,
+                };
             }
 
-            return [...currentFilters, assigneeLabel];
+            return {
+                ...currentFilters,
+                [columnId]: [...currentColumnFilters, filterValue],
+            };
         });
     }
 
-    function handleAssigneeFiltersClear() {
-        setSelectedAssigneeFilters([]);
+    function handleTaskListFiltersClear(columnId) {
+        setSelectedTaskListFilters(function clearColumnFilters(currentFilters) {
+            if (!currentFilters[columnId]) {
+                return currentFilters;
+            }
+
+            const {
+                [columnId]: _removedColumnFilters,
+                ...nextFilters
+            } = currentFilters;
+
+            return nextFilters;
+        });
     }
 
-    function handleAssigneeSortToggle() {
-        setAssigneeSortDirection(function updateAssigneeSortDirection(currentDirection) {
-            return getNextAssigneeSortDirection(currentDirection);
+    function handleTaskListSortToggle(columnId) {
+        setTaskListSort(function updateSort(currentSort) {
+            return getNextTaskListSort(currentSort, columnId);
         });
+    }
+
+    function handleTaskListColumnVisibilityToggle(columnId) {
+        const column = getTaskListColumn(columnId);
+
+        if (!column || !column.canHide) {
+            return;
+        }
+
+        const isColumnVisible = Boolean(taskListColumnVisibility[columnId]);
+        const nextVisibility = {
+            ...taskListColumnVisibility,
+            [columnId]: !isColumnVisible,
+        };
+        const nextVisibleColumns = getVisibleTaskListColumns(nextVisibility);
+        let resizeMode = "expand";
+
+        if (isColumnVisible) {
+            resizeMode = "fit";
+        }
+
+        updateTaskListWidthForColumns(nextVisibleColumns, resizeMode);
+
+        setTaskListColumnVisibility(function updateColumnVisibility(currentVisibility) {
+            return {
+                ...currentVisibility,
+                [columnId]: !currentVisibility[columnId],
+            };
+        });
+    }
+
+    function handleTaskListAutoResize() {
+        finishTaskListResize();
+        updateTaskListWidthForColumns(visibleTaskListColumns, "fit");
+    }
+
+    function finishTaskListResize() {
+        cancelTaskListResizeFrame(taskListResizeFrameIdRef);
+        taskListResizeStateRef.current = null;
+        document.body.classList.remove("task-list-resizing");
+    }
+
+    function updateTaskListWidthForColumns(columns, resizeMode) {
+        if (isCompactLayout) {
+            return;
+        }
+
+        const requiredTaskListWidth = getTaskListColumnsMinimumWidth(columns);
+        const maximumTaskListWidth = getMaximumDesktopTaskListWidth(shellSize.width);
+        let targetTaskListWidth = requiredTaskListWidth;
+
+        if (resizeMode === "expand") {
+            targetTaskListWidth = Math.max(taskListWidth, requiredTaskListWidth);
+        }
+
+        const nextTaskListWidth = getClampedTaskListWidth(targetTaskListWidth, maximumTaskListWidth);
+
+        applyTaskListContentWidth(plannerContentRef.current, nextTaskListWidth);
+
+        if (nextTaskListWidth === taskListWidth) {
+            return;
+        }
+
+        setTaskListWidth(nextTaskListWidth);
+        saveTaskListWidth(nextTaskListWidth);
     }
 
     function handleTaskListScroll(event) {
@@ -426,6 +603,8 @@ export default function PlannerShell(props) {
                 canRedo={canRedo}
                 canUndo={canUndo}
                 isSaving={isSaving}
+                colorMode={colorMode}
+                showTimelineHorizontalGridLines={showTimelineHorizontalGridLines}
                 zoomMode={zoomMode}
                 onAddTaskClick={onAddTaskClick}
                 onCopySelectedTasks={onCopySelectedTasks}
@@ -436,17 +615,19 @@ export default function PlannerShell(props) {
                 onPasteCopiedTasks={onPasteCopiedTasks}
                 onRefreshPlanner={onRefreshPlanner}
                 onRedoTaskChange={onRedoTaskChange}
-                onSettingsClick={onSettingsClick}
                 onScrollTimelineFuture={handleScrollTimelineFuture}
                 onScrollTimelinePast={handleScrollTimelinePast}
                 onScrollTimelineToday={handleScrollTimelineToday}
                 onTimelineZoomModeChange={handleTimelineZoomModeChange}
+                onColorModeToggle={onColorModeToggle}
+                onTimelineHorizontalGridLinesToggle={onTimelineHorizontalGridLinesToggle}
                 onTaskListCollapseToggle={handleTaskListCollapseToggle}
                 onUndoTaskChange={onUndoTaskChange}
                 selectedDatesHaveDayOff={selectedDatesHaveDayOff}
             />
             {isLoading && <LinearProgress className="planner-progress" />}
             <Box
+                ref={plannerContentRef}
                 className={getPlannerContentClassName(isEffectiveTaskListCollapsed)}
                 sx={{
                     gridTemplateColumns: `${taskListColumnWidth}px minmax(0, 1fr)`,
@@ -458,27 +639,33 @@ export default function PlannerShell(props) {
                     panelRef={taskListPanelRef}
                     tasks={displayedTasks}
                     assignees={assignees}
-                    assigneeFilterOptions={assigneeFilterOptions}
-                    assigneeSortDirection={assigneeSortDirection}
+                    columns={visibleTaskListColumns}
+                    allColumns={TASK_LIST_COLUMNS}
+                    columnVisibility={taskListColumnVisibility}
+                    filterOptionsByColumn={taskListFilterOptions}
                     highlightedTaskId={taskListHighlightedTaskId}
                     isCollapsed={isEffectiveTaskListCollapsed}
-                    selectedAssigneeFilters={selectedAssigneeFilters}
+                    selectedFiltersByColumn={selectedTaskListFilters}
                     selectedTaskIds={selectedTaskIds}
+                    sortState={taskListSort}
                     headerHeight={timelineHeaderHeight}
-                    onAssigneeFiltersClear={handleAssigneeFiltersClear}
-                    onAssigneeFilterToggle={handleAssigneeFilterToggle}
-                    onAssigneeSortToggle={handleAssigneeSortToggle}
+                    onColumnVisibilityToggle={handleTaskListColumnVisibilityToggle}
                     onClearHighlight={handleClearTaskHighlight}
                     onClearSelection={onClearSelection}
+                    onFilterToggle={handleTaskListFilterToggle}
+                    onFiltersClear={handleTaskListFiltersClear}
                     onHighlightTask={handleTaskHighlight}
                     onPanelScroll={handleTaskListScroll}
+                    onAutoResize={handleTaskListAutoResize}
                     onResizeStart={handleTaskListResizeStart}
                     onSelectTask={onSelectTask}
+                    onSortToggle={handleTaskListSortToggle}
                 />
                 <TimelineChart
                     panelRef={timelinePanelRef}
                     tasks={displayedTasks}
                     dayOffs={dayOffs}
+                    projectNames={projectNames}
                     cutTaskIds={cutTaskIds}
                     highlightedTaskId={timelineHighlightedTaskId}
                     isLoading={isLoading}
@@ -504,23 +691,18 @@ export default function PlannerShell(props) {
                 open={isDrawerOpen}
                 isSaving={isSaving}
                 assignees={assignees}
+                projectNames={projectNames}
                 isAssigneeSaving={isAssigneeSaving}
+                isProjectSaving={isProjectSaving}
                 mode={drawerMode}
                 task={selectedTask}
                 tasks={selectedTasks}
                 onClose={onDrawerClose}
                 onCreateTask={onCreateTask}
                 onSaveAssignees={onSaveAssignees}
+                onSaveProjectNames={onSaveProjectNames}
                 onUpdateTask={onUpdateTask}
                 onUpdateTasks={onUpdateTasks}
-            />
-            <SettingsDrawer
-                open={isSettingsDrawerOpen}
-                colorMode={colorMode}
-                showTimelineHorizontalGridLines={showTimelineHorizontalGridLines}
-                onClose={onSettingsDrawerClose}
-                onColorModeToggle={onColorModeToggle}
-                onTimelineHorizontalGridLinesToggle={onTimelineHorizontalGridLinesToggle}
             />
             <DayOffDrawer
                 open={isDayOffDrawerOpen}
@@ -628,6 +810,26 @@ function cancelShellResizeFrame(shellResizeFrameIdRef) {
 }
 
 
+function cancelTaskListResizeFrame(taskListResizeFrameIdRef) {
+    if (taskListResizeFrameIdRef.current === null) {
+        return;
+    }
+
+    window.cancelAnimationFrame(taskListResizeFrameIdRef.current);
+    taskListResizeFrameIdRef.current = null;
+}
+
+
+function applyTaskListContentWidth(plannerContent, taskListWidth) {
+    if (!plannerContent) {
+        return;
+    }
+
+    plannerContent.style.gridTemplateColumns = `${taskListWidth}px minmax(0, 1fr)`;
+    plannerContent.style.setProperty("--planner-task-list-boundary", `${taskListWidth}px`);
+}
+
+
 function getTaskListColumnWidth(
     taskListWidth,
     isTaskListCollapsed,
@@ -647,7 +849,10 @@ function getTaskListColumnWidth(
 
 
 function getDesktopTaskListWidth(taskListWidth, shellWidth) {
-    const clampedTaskListWidth = getClampedTaskListWidth(taskListWidth);
+    const clampedTaskListWidth = getClampedTaskListWidth(
+        taskListWidth,
+        getMaximumDesktopTaskListWidth(shellWidth),
+    );
 
     if (shellWidth <= 0) {
         return clampedTaskListWidth;
@@ -656,13 +861,21 @@ function getDesktopTaskListWidth(taskListWidth, shellWidth) {
     const availableContentWidth = getAvailablePlannerContentWidth(shellWidth);
     const maximumResponsiveTaskListWidth = Math.max(
         MIN_TASK_LIST_WIDTH_PIXELS,
-        Math.min(
-            MAX_TASK_LIST_WIDTH_PIXELS,
-            availableContentWidth - MIN_TIMELINE_WIDTH_PIXELS,
-        ),
+        Math.min(getMaximumDesktopTaskListWidth(shellWidth), availableContentWidth),
     );
 
     return Math.min(clampedTaskListWidth, maximumResponsiveTaskListWidth);
+}
+
+
+function getMaximumDesktopTaskListWidth(shellWidth) {
+    if (shellWidth <= 0) {
+        return MAX_STORED_TASK_LIST_WIDTH_PIXELS;
+    }
+
+    const halfScreenWidth = Math.floor(shellWidth * MAX_TASK_LIST_SCREEN_WIDTH_RATIO);
+
+    return Math.max(MIN_TASK_LIST_WIDTH_PIXELS, halfScreenWidth);
 }
 
 
@@ -695,33 +908,41 @@ function getPlannerContentClassName(isTaskListCollapsed) {
 }
 
 
-function getAssigneeFilterOptions(tasks) {
-    const assigneeLabels = tasks.map(function mapTaskAssignee(task) {
-        return getAssigneeLabel(task);
-    });
-    const uniqueAssigneeLabels = Array.from(new Set(assigneeLabels));
+function getFilterOptionsByColumn(tasks, visibleColumns) {
+    return visibleColumns.reduce(function mapColumnFilterOptions(filterOptions, column) {
+        if (!column.canFilter) {
+            return filterOptions;
+        }
 
-    return uniqueAssigneeLabels.sort(compareAssigneeLabels);
+        const columnValues = tasks.map(function mapTaskColumnValue(task) {
+            return String(getTaskListColumnValue(task, column.id));
+        });
+        const uniqueColumnValues = Array.from(new Set(columnValues));
+
+        filterOptions[column.id] = uniqueColumnValues.sort(compareTextValues);
+
+        return filterOptions;
+    }, {});
 }
 
 
-function getDisplayedTasks(tasks, selectedAssigneeFilters, assigneeSortDirection) {
+function getDisplayedTasks(tasks, selectedFiltersByColumn, sortState) {
     const indexedTasks = tasks.map(function mapIndexedTask(task, index) {
         return {
             index,
             task,
         };
     });
-    const filteredTasks = getFilteredIndexedTasks(indexedTasks, selectedAssigneeFilters);
+    const filteredTasks = getFilteredIndexedTasks(indexedTasks, selectedFiltersByColumn);
 
-    if (assigneeSortDirection === ASSIGNEE_SORT_NONE) {
+    if (!sortState.columnId || sortState.direction === TASK_LIST_SORT_NONE) {
         return filteredTasks.map(function mapFilteredTask(indexedTask) {
             return indexedTask.task;
         });
     }
 
     const sortedTasks = [...filteredTasks].sort(function compareIndexedTasks(first, second) {
-        return compareIndexedTasksByAssignee(first, second, assigneeSortDirection);
+        return compareIndexedTasksBySort(first, second, sortState);
     });
 
     return sortedTasks.map(function mapSortedTask(indexedTask) {
@@ -730,63 +951,146 @@ function getDisplayedTasks(tasks, selectedAssigneeFilters, assigneeSortDirection
 }
 
 
-function getFilteredIndexedTasks(indexedTasks, selectedAssigneeFilters) {
-    if (selectedAssigneeFilters.length === 0) {
+function getFilteredIndexedTasks(indexedTasks, selectedFiltersByColumn) {
+    const activeFilters = Object.entries(selectedFiltersByColumn).filter(function hasFilters(
+        [_columnId, filterValues],
+    ) {
+        return filterValues.length > 0;
+    });
+
+    if (activeFilters.length === 0) {
         return indexedTasks;
     }
 
-    const selectedAssignees = new Set(selectedAssigneeFilters);
+    return indexedTasks.filter(function matchSelectedFilters(indexedTask) {
+        return activeFilters.every(function matchColumnFilter([columnId, filterValues]) {
+            const selectedValues = new Set(filterValues);
+            const taskValue = String(getTaskListColumnValue(indexedTask.task, columnId));
 
-    return indexedTasks.filter(function matchSelectedAssignee(indexedTask) {
-        return selectedAssignees.has(getAssigneeLabel(indexedTask.task));
+            return selectedValues.has(taskValue);
+        });
     });
 }
 
 
-function compareIndexedTasksByAssignee(first, second, assigneeSortDirection) {
-    const firstAssignee = getAssigneeLabel(first.task);
-    const secondAssignee = getAssigneeLabel(second.task);
-    const assigneeComparison = compareAssigneeLabels(firstAssignee, secondAssignee);
+function compareIndexedTasksBySort(first, second, sortState) {
+    const column = getTaskListColumn(sortState.columnId);
 
-    if (assigneeComparison === 0) {
+    if (!column) {
         return first.index - second.index;
     }
 
-    if (assigneeSortDirection === ASSIGNEE_SORT_DESCENDING) {
-        return -assigneeComparison;
+    const firstValue = getTaskListColumnValue(first.task, column.id);
+    const secondValue = getTaskListColumnValue(second.task, column.id);
+    const valueComparison = compareTaskListValues(firstValue, secondValue, column.sortType);
+
+    if (valueComparison === 0) {
+        return first.index - second.index;
     }
 
-    return assigneeComparison;
+    if (sortState.direction === TASK_LIST_SORT_DESCENDING) {
+        return -valueComparison;
+    }
+
+    return valueComparison;
 }
 
 
-function compareAssigneeLabels(firstAssignee, secondAssignee) {
-    return ASSIGNEE_COLLATOR.compare(firstAssignee, secondAssignee);
+function compareTaskListValues(firstValue, secondValue, sortType) {
+    if (sortType === "number") {
+        return Number(firstValue) - Number(secondValue);
+    }
+
+    if (sortType === "date") {
+        return compareDateValues(firstValue, secondValue);
+    }
+
+    return compareTextValues(String(firstValue), String(secondValue));
 }
 
 
-function getNextAssigneeSortDirection(currentDirection) {
-    if (currentDirection === ASSIGNEE_SORT_NONE) {
-        return ASSIGNEE_SORT_ASCENDING;
+function compareDateValues(firstValue, secondValue) {
+    const firstTime = Date.parse(firstValue);
+    const secondTime = Date.parse(secondValue);
+
+    if (Number.isNaN(firstTime) && Number.isNaN(secondTime)) {
+        return compareTextValues(String(firstValue), String(secondValue));
     }
 
-    if (currentDirection === ASSIGNEE_SORT_ASCENDING) {
-        return ASSIGNEE_SORT_DESCENDING;
+    if (Number.isNaN(firstTime)) {
+        return -1;
     }
 
-    return ASSIGNEE_SORT_NONE;
+    if (Number.isNaN(secondTime)) {
+        return 1;
+    }
+
+    return firstTime - secondTime;
 }
 
 
-function getAssigneeLabel(task) {
-    const assigneeLabel = task.assignee || EMPTY_ASSIGNEE_LABEL;
-    const trimmedAssigneeLabel = assigneeLabel.trim();
+function compareTextValues(firstValue, secondValue) {
+    return TASK_LIST_COLLATOR.compare(firstValue, secondValue);
+}
 
-    if (!trimmedAssigneeLabel) {
-        return UNASSIGNED_ASSIGNEE_LABEL;
+
+function getNextTaskListSort(currentSort, columnId) {
+    if (currentSort.columnId !== columnId) {
+        return {
+            columnId,
+            direction: TASK_LIST_SORT_ASCENDING,
+        };
     }
 
-    return trimmedAssigneeLabel;
+    if (currentSort.direction === TASK_LIST_SORT_NONE) {
+        return {
+            columnId,
+            direction: TASK_LIST_SORT_ASCENDING,
+        };
+    }
+
+    if (currentSort.direction === TASK_LIST_SORT_ASCENDING) {
+        return {
+            columnId,
+            direction: TASK_LIST_SORT_DESCENDING,
+        };
+    }
+
+    return EMPTY_TASK_LIST_SORT;
+}
+
+
+function getVisibleTaskListColumns(taskListColumnVisibility) {
+    return TASK_LIST_COLUMNS.filter(function isColumnVisible(column) {
+        if (!column.canHide) {
+            return true;
+        }
+
+        return Boolean(taskListColumnVisibility[column.id]);
+    });
+}
+
+
+function hasActiveTaskListFilters(selectedFiltersByColumn) {
+    return Object.values(selectedFiltersByColumn).some(function hasFilterValues(filterValues) {
+        return filterValues.length > 0;
+    });
+}
+
+
+function hasSameFilterState(firstFilters, secondFilters) {
+    return JSON.stringify(firstFilters) === JSON.stringify(secondFilters);
+}
+
+
+function getInitialTaskListColumnVisibility() {
+    const storedColumnVisibility = readStoredTaskListColumnVisibility();
+
+    if (storedColumnVisibility) {
+        return storedColumnVisibility;
+    }
+
+    return getDefaultTaskListColumnVisibility();
 }
 
 
@@ -829,6 +1133,48 @@ function readStoredTaskListWidth() {
 }
 
 
+function readStoredTaskListColumnVisibility() {
+    try {
+        const storedValue = window.localStorage.getItem(TASK_LIST_COLUMN_VISIBILITY_STORAGE_KEY);
+
+        if (!storedValue) {
+            return null;
+        }
+
+        const parsedValue = JSON.parse(storedValue);
+
+        return normalizeStoredTaskListColumnVisibility(parsedValue);
+    } catch {
+        return null;
+    }
+}
+
+
+function normalizeStoredTaskListColumnVisibility(storedVisibility) {
+    if (!storedVisibility || typeof storedVisibility !== "object") {
+        return null;
+    }
+
+    const defaultVisibility = getDefaultTaskListColumnVisibility();
+    const normalizedVisibility = {
+        ...defaultVisibility,
+    };
+
+    TASK_LIST_COLUMNS.forEach(function normalizeColumnVisibility(column) {
+        if (!column.canHide) {
+            normalizedVisibility[column.id] = true;
+            return;
+        }
+
+        if (typeof storedVisibility[column.id] === "boolean") {
+            normalizedVisibility[column.id] = storedVisibility[column.id];
+        }
+    });
+
+    return normalizedVisibility;
+}
+
+
 function saveTaskListWidth(taskListWidth) {
     try {
         window.localStorage.setItem(TASK_LIST_WIDTH_STORAGE_KEY, String(taskListWidth));
@@ -838,9 +1184,24 @@ function saveTaskListWidth(taskListWidth) {
 }
 
 
-function getClampedTaskListWidth(taskListWidth) {
+function saveTaskListColumnVisibility(taskListColumnVisibility) {
+    try {
+        window.localStorage.setItem(
+            TASK_LIST_COLUMN_VISIBILITY_STORAGE_KEY,
+            JSON.stringify(taskListColumnVisibility),
+        );
+    } catch {
+        return;
+    }
+}
+
+
+function getClampedTaskListWidth(
+    taskListWidth,
+    maximumTaskListWidth = MAX_STORED_TASK_LIST_WIDTH_PIXELS,
+) {
     return Math.min(
         Math.max(taskListWidth, MIN_TASK_LIST_WIDTH_PIXELS),
-        MAX_TASK_LIST_WIDTH_PIXELS,
+        maximumTaskListWidth,
     );
 }

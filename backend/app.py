@@ -11,6 +11,8 @@ from models import (
     DayOffDateList,
     DayOffListUpdate,
     PlannerData,
+    ProjectName,
+    ProjectNameListUpdate,
     Task,
     TaskCreate,
     TaskListUpdate,
@@ -22,9 +24,11 @@ from storage import (
     delete_task,
     list_assignees,
     list_day_offs,
+    list_project_names,
     list_tasks,
     replace_assignees,
     replace_day_offs,
+    replace_project_names,
     replace_tasks,
     update_task,
 )
@@ -87,6 +91,11 @@ def get_assignees() -> list[Assignee]:
     return list_assignees()
 
 
+@app.get("/api/project-name", response_model=list[ProjectName])
+def get_project_names() -> list[ProjectName]:
+    return list_project_names()
+
+
 @app.post("/api/tasks", response_model=Task, status_code=status.HTTP_201_CREATED)
 def post_task(task_create: TaskCreate, after_task_id: str | None = None) -> Task:
     return create_task(task_create, after_task_id)
@@ -110,6 +119,11 @@ def put_day_offs_bulk(day_off_list_update: DayOffListUpdate) -> list[DayOff]:
 @app.put("/api/assignees", response_model=PlannerData)
 def put_assignees(assignee_list_update: AssigneeListUpdate) -> PlannerData:
     return replace_assignees(assignee_list_update)
+
+
+@app.put("/api/project-name", response_model=PlannerData)
+def put_project_names(project_name_list_update: ProjectNameListUpdate) -> PlannerData:
+    return replace_project_names(project_name_list_update)
 
 
 @app.post("/api/tasks/bulk/sync", response_model=list[Task])

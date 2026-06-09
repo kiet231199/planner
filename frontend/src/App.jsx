@@ -6,9 +6,11 @@ import {
     deleteDayOffs,
     listAssignees,
     listDayOffs,
+    listProjectNames,
     listTasks,
     replaceAssignees,
     replaceDayOffs,
+    replaceProjectNames,
     replaceTasks,
     replaceTasksBeforeUnload,
 } from "./api/tasksClient";
@@ -100,6 +102,7 @@ export default function App() {
     const [tasks, setTasks] = useState([]);
     const [dayOffs, setDayOffs] = useState([]);
     const [assignees, setAssignees] = useState([]);
+    const [projectNames, setProjectNames] = useState([]);
     const [selectedTaskIds, setSelectedTaskIds] = useState([]);
     const [selectedDayOffDates, setSelectedDayOffDates] = useState([]);
     const [copiedTasks, setCopiedTasks] = useState([]);
@@ -107,13 +110,13 @@ export default function App() {
     const [taskBufferMode, setTaskBufferMode] = useState(null);
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
     const [isDayOffDrawerOpen, setIsDayOffDrawerOpen] = useState(false);
-    const [isSettingsDrawerOpen, setIsSettingsDrawerOpen] = useState(false);
     const [drawerMode, setDrawerMode] = useState("create");
     const [dayOffDrawerMode, setDayOffDrawerMode] = useState("create");
     const [isLoading, setIsLoading] = useState(true);
     const [isDayOffSaving, setIsDayOffSaving] = useState(false);
     const [isAssigneeSaving, setIsAssigneeSaving] = useState(false);
-    const isSaving = isDayOffSaving || isAssigneeSaving;
+    const [isProjectSaving, setIsProjectSaving] = useState(false);
+    const isSaving = isDayOffSaving || isAssigneeSaving || isProjectSaving;
     const [errorMessage, setErrorMessage] = useState("");
     const [historyState, setHistoryState] = useState({
         canUndo: false,
@@ -123,6 +126,7 @@ export default function App() {
     const tasksRef = useRef([]);
     const dayOffsRef = useRef([]);
     const assigneesRef = useRef([]);
+    const projectNamesRef = useRef([]);
     const selectedTaskIdsRef = useRef([]);
     const selectedDayOffDatesRef = useRef([]);
     const copiedTasksRef = useRef([]);
@@ -162,6 +166,10 @@ export default function App() {
     useEffect(function keepLatestAssigneesReference() {
         assigneesRef.current = assignees;
     }, [assignees]);
+
+    useEffect(function keepLatestProjectNamesReference() {
+        projectNamesRef.current = projectNames;
+    }, [projectNames]);
 
     useEffect(function keepLatestSelectionReference() {
         selectedTaskIdsRef.current = selectedTaskIds;
@@ -220,7 +228,6 @@ export default function App() {
             const isAnyDrawerOpen = (
                 isDrawerOpen
                 || isDayOffDrawerOpen
-                || isSettingsDrawerOpen
             );
             const currentSelectedTaskIds = selectedTaskIdsRef.current;
             const currentCopiedTasks = copiedTasksRef.current;
@@ -287,7 +294,6 @@ export default function App() {
     }, [
         isDayOffDrawerOpen,
         isDrawerOpen,
-        isSettingsDrawerOpen,
     ]);
 
     useEffect(function scheduleDirtyTaskSync() {
@@ -324,10 +330,16 @@ export default function App() {
         setIsLoading(true);
 
         try {
-            const [tasksResult, dayOffsResult, assigneesResult] = await Promise.allSettled([
+            const [
+                tasksResult,
+                dayOffsResult,
+                assigneesResult,
+                projectNamesResult,
+            ] = await Promise.allSettled([
                 listTasks(),
                 listDayOffs(),
                 listAssignees(),
+                listProjectNames(),
             ]);
 
             if (tasksResult.status === "rejected") {
@@ -360,6 +372,17 @@ export default function App() {
                 assigneesRef.current = [];
                 setAssignees([]);
                 setErrorMessage(getAssigneeLoadErrorMessage(assigneesResult.reason));
+            }
+
+            if (projectNamesResult.status === "fulfilled") {
+                const loadedProjectNames = projectNamesResult.value;
+
+                projectNamesRef.current = loadedProjectNames;
+                setProjectNames(loadedProjectNames);
+            } else {
+                projectNamesRef.current = [];
+                setProjectNames([]);
+                setErrorMessage(getProjectNamesLoadErrorMessage(projectNamesResult.reason));
             }
         } catch (error) {
             setErrorMessage(error.message);
@@ -773,6 +796,32 @@ export default function App() {
         }
     }
 
+    async function handleSaveProjectNames(projectUpdate) {
+        if (isDirtyRef.current) {
+            await flushTasksToBackend();
+        }
+
+        if (isDirtyRef.current) {
+            return null;
+        }
+
+        setIsProjectSaving(true);
+
+        try {
+            const updatedPlannerData = await replaceProjectNames(projectUpdate);
+
+            applyPlannerData(updatedPlannerData);
+
+            return updatedPlannerData;
+        } catch (error) {
+            setErrorMessage(error.message);
+
+            return null;
+        } finally {
+            setIsProjectSaving(false);
+        }
+    }
+
     function handleSelectDayOffDate(date, selectionMode) {
         setSelectedDayOffDates(function updateSelectedDayOffDates(currentDates) {
             const nextDates = getNextSelectedDayOffDates(
@@ -964,10 +1013,12 @@ export default function App() {
         const nextTasks = cloneTasks(plannerData.tasks);
         const nextDayOffs = cloneDayOffs(plannerData.dayOffs);
         const nextAssignees = cloneAssignees(plannerData.assignees);
+        const nextProjectNames = cloneProjectNames(plannerData.project_name || []);
 
         tasksRef.current = nextTasks;
         dayOffsRef.current = nextDayOffs;
         assigneesRef.current = nextAssignees;
+        projectNamesRef.current = nextProjectNames;
         undoStackRef.current = [];
         redoStackRef.current = [];
         isDirtyRef.current = false;
@@ -975,6 +1026,7 @@ export default function App() {
         setTasks(nextTasks);
         setDayOffs(nextDayOffs);
         setAssignees(nextAssignees);
+        setProjectNames(nextProjectNames);
         clearMissingSelection(nextTasks);
         refreshHistoryState();
     }
@@ -1127,15 +1179,14 @@ export default function App() {
         });
     }
 
-    function handleTimelineHorizontalGridLinesToggle(event) {
-        const nextShowTimelineHorizontalGridLines = event.target.checked;
+    function handleTimelineHorizontalGridLinesToggle() {
+        setShowTimelineHorizontalGridLines(function toggleGridLines(currentValue) {
+            const nextShowTimelineHorizontalGridLines = !currentValue;
 
-        saveTimelineHorizontalGridLines(nextShowTimelineHorizontalGridLines);
-        setShowTimelineHorizontalGridLines(nextShowTimelineHorizontalGridLines);
-    }
+            saveTimelineHorizontalGridLines(nextShowTimelineHorizontalGridLines);
 
-    function handleSettingsClick() {
-        setIsSettingsDrawerOpen(true);
+            return nextShowTimelineHorizontalGridLines;
+        });
     }
 
     function handleRefreshPlanner() {
@@ -1186,15 +1237,16 @@ export default function App() {
                     tasks={tasks}
                     dayOffs={dayOffs}
                     assignees={assignees}
+                    projectNames={projectNames}
                     selectedTaskId={selectedTaskId}
                     selectedTaskIds={selectedTaskIds}
                     selectedDayOffDates={selectedDayOffDates}
                     isDrawerOpen={isDrawerOpen}
                     isDayOffDrawerOpen={isDayOffDrawerOpen}
-                    isSettingsDrawerOpen={isSettingsDrawerOpen}
                     isLoading={isLoading}
                     isSaving={isSaving}
                     isAssigneeSaving={isAssigneeSaving}
+                    isProjectSaving={isProjectSaving}
                     canRedo={historyState.canRedo}
                     canUndo={historyState.canUndo}
                     canCopySelectedTasks={canCopySelectedTasks}
@@ -1215,14 +1267,12 @@ export default function App() {
                     onDayOffActionClick={handleDayOffActionClick}
                     onDayOffDrawerClose={handleDayOffDrawerClose}
                     onSaveAssignees={handleSaveAssignees}
+                    onSaveProjectNames={handleSaveProjectNames}
                     onTimelineHorizontalGridLinesToggle={
                         handleTimelineHorizontalGridLinesToggle
                     }
                     onDrawerClose={function closeDrawer() {
                         setIsDrawerOpen(false);
-                    }}
-                    onSettingsDrawerClose={function closeSettingsDrawer() {
-                        setIsSettingsDrawerOpen(false);
                     }}
                     onCreateTask={handleCreateTask}
                     onCutSelectedTasks={handleCutSelectedTasks}
@@ -1254,7 +1304,6 @@ export default function App() {
                     onTimelineZoom={handleTimelineZoom}
                     onTimelineZoomModeChange={handleTimelineZoomModeChange}
                     onColorModeToggle={handleColorModeToggle}
-                    onSettingsClick={handleSettingsClick}
                     selectedDatesHaveDayOff={selectedDatesHaveDayOff}
                 />
                 <Snackbar
@@ -1646,6 +1695,15 @@ function cloneAssignees(assignees) {
     return assignees.map(function cloneAssignee(assignee) {
         return {
             ...assignee,
+        };
+    });
+}
+
+
+function cloneProjectNames(projectNames) {
+    return projectNames.map(function cloneProjectName(projectName) {
+        return {
+            ...projectName,
         };
     });
 }
@@ -2132,6 +2190,7 @@ function hasSameTaskValues(task, expectedTask) {
         && (task.description || "") === (expectedTask.description || "")
         && (task.url || "") === (expectedTask.url || "")
         && (task.assignee || "Unassigned") === (expectedTask.assignee || "Unassigned")
+        && (task.projectName || "...") === (expectedTask.projectName || "...")
         && task.taskType === expectedTask.taskType
         && (task.taskLevel || "") === (expectedTask.taskLevel || "")
         && task.startDate === expectedTask.startDate
@@ -2317,4 +2376,13 @@ function getAssigneeLoadErrorMessage(error) {
     }
 
     return "Assignees could not be loaded.";
+}
+
+
+function getProjectNamesLoadErrorMessage(error) {
+    if (error && error.message) {
+        return `Projects could not be loaded. ${error.message}`;
+    }
+
+    return "Projects could not be loaded.";
 }

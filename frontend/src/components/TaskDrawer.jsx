@@ -9,13 +9,16 @@ export default function TaskDrawer(props) {
         open,
         isSaving,
         assignees,
+        projectNames,
         isAssigneeSaving,
+        isProjectSaving,
         mode,
         task,
         tasks = [],
         onClose,
         onCreateTask,
         onSaveAssignees,
+        onSaveProjectNames,
         onUpdateTask,
         onUpdateTasks,
     } = props;
@@ -50,9 +53,12 @@ export default function TaskDrawer(props) {
                 initialTasks={isEditMode ? selectedTasks : []}
                 isSaving={isSaving}
                 assignees={assignees}
+                projectNames={projectNames}
                 isAssigneeSaving={isAssigneeSaving}
+                isProjectSaving={isProjectSaving}
                 onCancel={onClose}
                 onSaveAssignees={onSaveAssignees}
+                onSaveProjectNames={onSaveProjectNames}
                 onSubmitTask={getSubmitTaskHandler(
                     isEditMode,
                     isBulkEditMode,
@@ -127,6 +133,7 @@ function getTaskFormKeyPart(task) {
         task.description || "",
         task.url || "",
         task.assignee || "",
+        task.projectName || "",
         task.taskType || "",
         task.taskLevel || "",
         task.startDate || "",

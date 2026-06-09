@@ -1,22 +1,30 @@
+import { useState } from "react";
 import AddIcon from "@mui/icons-material/Add";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ContentCopyOutlinedIcon from "@mui/icons-material/ContentCopyOutlined";
 import ContentCutOutlinedIcon from "@mui/icons-material/ContentCutOutlined";
 import ContentPasteOutlinedIcon from "@mui/icons-material/ContentPasteOutlined";
+import DarkModeOutlinedIcon from "@mui/icons-material/DarkModeOutlined";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import EventAvailableIcon from "@mui/icons-material/EventAvailable";
 import EventBusyIcon from "@mui/icons-material/EventBusy";
+import GridOnOutlinedIcon from "@mui/icons-material/GridOnOutlined";
 import KeyboardTabIcon from "@mui/icons-material/KeyboardTab";
+import LightModeOutlinedIcon from "@mui/icons-material/LightModeOutlined";
 import RedoIcon from "@mui/icons-material/Redo";
-import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import TodayOutlinedIcon from "@mui/icons-material/TodayOutlined";
 import UndoIcon from "@mui/icons-material/Undo";
+import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import {
     Box,
     Button,
     IconButton,
+    ListItemIcon,
+    ListItemText,
+    Menu,
+    MenuItem,
     ToggleButton,
     ToggleButtonGroup,
     Tooltip,
@@ -33,11 +41,14 @@ export default function TaskToolbar(props) {
         canPasteCopiedTasks,
         canRedo,
         canUndo,
+        colorMode,
         hasSelectedDayOffDates,
         hasSelectedTask,
         isTaskListCollapsed,
         isSaving,
+        showTimelineHorizontalGridLines,
         onAddTaskClick,
+        onColorModeToggle,
         onDayOffActionClick,
         onDeleteSelectedTask,
         onEditSelectedTask,
@@ -46,10 +57,10 @@ export default function TaskToolbar(props) {
         onPasteCopiedTasks,
         onRefreshPlanner,
         onRedoTaskChange,
-        onSettingsClick,
         onScrollTimelineFuture,
         onScrollTimelinePast,
         onScrollTimelineToday,
+        onTimelineHorizontalGridLinesToggle,
         onTimelineZoomModeChange,
         onTaskListCollapseToggle,
         onUndoTaskChange,
@@ -59,6 +70,9 @@ export default function TaskToolbar(props) {
     const dayOffButtonLabel = selectedDatesHaveDayOff ? "Remove Day-off" : "Add Day-off";
     const DayOffButtonIcon = selectedDatesHaveDayOff ? EventBusyIcon : EventAvailableIcon;
     const taskListCollapseButtonLabel = getTaskListCollapseButtonLabel(isTaskListCollapsed);
+    const [viewMenuAnchorElement, setViewMenuAnchorElement] = useState(null);
+    const isViewMenuOpen = Boolean(viewMenuAnchorElement);
+    const isDarkMode = colorMode === "dark";
 
     function handleZoomModeChange(_, nextZoomMode) {
         if (!nextZoomMode) {
@@ -66,6 +80,24 @@ export default function TaskToolbar(props) {
         }
 
         onTimelineZoomModeChange(nextZoomMode);
+    }
+
+    function handleViewMenuOpen(event) {
+        setViewMenuAnchorElement(event.currentTarget);
+    }
+
+    function handleViewMenuClose() {
+        setViewMenuAnchorElement(null);
+    }
+
+    function handleColorModeMenuClick() {
+        onColorModeToggle();
+        handleViewMenuClose();
+    }
+
+    function handleTimelineGridlinesMenuClick() {
+        onTimelineHorizontalGridLinesToggle();
+        handleViewMenuClose();
     }
 
     return (
@@ -141,6 +173,12 @@ export default function TaskToolbar(props) {
                     >
                         <DayOffButtonIcon />
                     </ToolbarIconButton>
+                    <ToolbarIconButton
+                        label="View"
+                        onClick={handleViewMenuOpen}
+                    >
+                        <VisibilityOutlinedIcon />
+                    </ToolbarIconButton>
                 </Box>
                 <Box className="toolbar-panel-bottom-actions">
                     <ToolbarIconButton
@@ -149,14 +187,32 @@ export default function TaskToolbar(props) {
                     >
                         {getTaskListCollapseIcon(isTaskListCollapsed)}
                     </ToolbarIconButton>
-                    <ToolbarIconButton
-                        label="Setting"
-                        onClick={onSettingsClick}
-                    >
-                        <SettingsOutlinedIcon />
-                    </ToolbarIconButton>
                 </Box>
             </Box>
+            <Menu
+                anchorEl={viewMenuAnchorElement}
+                open={isViewMenuOpen}
+                anchorOrigin={{
+                    vertical: "center",
+                    horizontal: "right",
+                }}
+                transformOrigin={{
+                    vertical: "center",
+                    horizontal: "left",
+                }}
+                onClose={handleViewMenuClose}
+            >
+                <ViewMenuItem
+                    icon={getColorModeMenuIcon(isDarkMode)}
+                    label={getColorModeMenuLabel(isDarkMode)}
+                    onClick={handleColorModeMenuClick}
+                />
+                <ViewMenuItem
+                    icon={<GridOnOutlinedIcon fontSize="small" />}
+                    label={getHorizontalGridlineMenuLabel(showTimelineHorizontalGridLines)}
+                    onClick={handleTimelineGridlinesMenuClick}
+                />
+            </Menu>
             <Box component="header" className="task-toolbar">
                 <Box component="h1" className="toolbar-title-heading">
                     <Button
@@ -222,6 +278,51 @@ export default function TaskToolbar(props) {
             </Box>
         </>
     );
+}
+
+
+function ViewMenuItem(props) {
+    const {
+        icon,
+        label,
+        onClick,
+    } = props;
+
+    return (
+        <MenuItem className="view-menu-item" onClick={onClick}>
+            <ListItemIcon className="view-menu-item-icon">
+                {icon}
+            </ListItemIcon>
+            <ListItemText primary={label} />
+        </MenuItem>
+    );
+}
+
+
+function getColorModeMenuIcon(isDarkMode) {
+    if (isDarkMode) {
+        return <LightModeOutlinedIcon fontSize="small" />;
+    }
+
+    return <DarkModeOutlinedIcon fontSize="small" />;
+}
+
+
+function getColorModeMenuLabel(isDarkMode) {
+    if (isDarkMode) {
+        return "Light mode";
+    }
+
+    return "Dark mode";
+}
+
+
+function getHorizontalGridlineMenuLabel(showTimelineHorizontalGridLines) {
+    if (showTimelineHorizontalGridLines) {
+        return "Disable horizontal gridlines";
+    }
+
+    return "Enable horizontal gridline";
 }
 
 

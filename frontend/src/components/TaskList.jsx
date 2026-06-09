@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
-import FilterListIcon from "@mui/icons-material/FilterList";
+import FilterAltIcon from "@mui/icons-material/FilterAlt";
 import {
     Avatar,
     Box,
@@ -17,14 +17,19 @@ import {
 } from "@mui/material";
 
 import { ROW_HEIGHT_PIXELS, getTimelineBodyRowCount } from "../utils/chartScale";
+import {
+    TASK_LIST_SORT_ASCENDING,
+    TASK_LIST_SORT_DESCENDING,
+    TASK_LIST_SORT_NONE,
+    getTaskAssigneeLabel,
+    getTaskListColumnsMinimumWidth,
+    getTaskListColumnDisplayValue,
+} from "../utils/taskListColumns";
 
 
 const UNASSIGNED_ASSIGNEE_LABEL = "Unassigned";
 const EMPTY_ASSIGNEE_LABEL = "";
 const UNASSIGNED_AVATAR_COLOR = "#d0d5dd";
-const ASSIGNEE_SORT_NONE = "none";
-const ASSIGNEE_SORT_ASCENDING = "ascending";
-const ASSIGNEE_SORT_DESCENDING = "descending";
 const ASSIGNEE_AVATAR_COLORS = [
     "#1e66f5",
     "#00a896",
@@ -41,28 +46,52 @@ export default function TaskList(props) {
     const {
         panelRef,
         tasks,
+        allColumns = [],
         assignees = [],
-        assigneeFilterOptions = [],
-        assigneeSortDirection,
+        columnVisibility = {},
+        columns = [],
+        filterOptionsByColumn = {},
         highlightedTaskId,
         isCollapsed = false,
-        selectedAssigneeFilters = [],
+        selectedFiltersByColumn = {},
         selectedTaskIds,
+        sortState,
         headerHeight,
-        onAssigneeFiltersClear,
-        onAssigneeFilterToggle,
-        onAssigneeSortToggle,
+        onColumnVisibilityToggle,
         onClearHighlight,
         onClearSelection,
+        onFilterToggle,
+        onFiltersClear,
         onHighlightTask,
         onPanelScroll,
+        onAutoResize,
         onResizeStart,
         onSelectTask,
+        onSortToggle,
     } = props;
-    const [filterAnchorElement, setFilterAnchorElement] = useState(null);
+    const [filterMenuState, setFilterMenuState] = useState({
+        anchorElement: null,
+        columnId: null,
+    });
+    const [columnMenuPosition, setColumnMenuPosition] = useState(null);
     const [panelHeight, setPanelHeight] = useState(0);
-    const isFilterMenuOpen = Boolean(filterAnchorElement);
-    const isAssigneeFilterActive = selectedAssigneeFilters.length > 0;
+    const isFilterMenuOpen = Boolean(filterMenuState.anchorElement);
+    const isColumnMenuOpen = Boolean(columnMenuPosition);
+    const activeFilterColumn = columns.find(function matchFilterColumn(column) {
+        return column.id === filterMenuState.columnId;
+    }) || null;
+    const activeFilterOptions = activeFilterColumn
+        ? filterOptionsByColumn[activeFilterColumn.id] || []
+        : [];
+    const activeSelectedFilters = activeFilterColumn
+        ? selectedFiltersByColumn[activeFilterColumn.id] || []
+        : [];
+    const gridTemplateColumns = getTaskListGridTemplateColumns(columns);
+    const gridMinimumWidth = getTaskListColumnsMinimumWidth(columns);
+    const taskListGridStyle = {
+        gridTemplateColumns,
+        minWidth: `${gridMinimumWidth}px`,
+    };
     const assigneeColorMap = useMemo(function memoizeAssigneeColorMap() {
         return getAssigneeColorMap(assignees);
     }, [assignees]);
@@ -93,13 +122,38 @@ export default function TaskList(props) {
         };
     }, [panelRef, isCollapsed]);
 
-    useEffect(function closeFilterMenuAfterCollapse() {
+    useEffect(function closeMenusAfterCollapse() {
         if (!isCollapsed) {
             return;
         }
 
-        setFilterAnchorElement(null);
+        setFilterMenuState({
+            anchorElement: null,
+            columnId: null,
+        });
+        setColumnMenuPosition(null);
     }, [isCollapsed]);
+
+    useEffect(function repositionColumnMenuOnContextMenu() {
+        if (!isColumnMenuOpen) {
+            return undefined;
+        }
+
+        function handleDocumentContextMenu(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            setColumnMenuPosition({
+                left: event.clientX,
+                top: event.clientY,
+            });
+        }
+
+        document.addEventListener("contextmenu", handleDocumentContextMenu, true);
+
+        return function removeDocumentContextMenuListener() {
+            document.removeEventListener("contextmenu", handleDocumentContextMenu, true);
+        };
+    }, [isColumnMenuOpen]);
 
     function handleTaskListMouseDown(event) {
         if (event.target instanceof Element && event.target.closest(".task-list-row")) {
@@ -114,22 +168,59 @@ export default function TaskList(props) {
         event.stopPropagation();
     }
 
+    function handleTaskListHeaderContextMenu(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        setColumnMenuPosition({
+            left: event.clientX,
+            top: event.clientY,
+        });
+    }
+
+    function handleColumnMenuClose() {
+        setColumnMenuPosition(null);
+    }
+
+    function handleColumnVisibilityClick(columnId) {
+        onColumnVisibilityToggle(columnId);
+    }
+
     function handleResizeMouseDown(event) {
         event.stopPropagation();
+
+        if (event.detail > 1) {
+            event.preventDefault();
+            return;
+        }
+
         onResizeStart(event);
     }
 
-    function handleAssigneeHeaderClick() {
-        onAssigneeSortToggle();
+    function handleResizeDoubleClick(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        onAutoResize();
     }
 
-    function handleAssigneeHeaderKeyDown(event) {
+    function handleHeaderCellClick(column) {
+        if (!column.canSort) {
+            return;
+        }
+
+        onSortToggle(column.id);
+    }
+
+    function handleHeaderCellKeyDown(event, column) {
+        if (!column.canSort) {
+            return;
+        }
+
         if (event.key !== "Enter" && event.key !== " ") {
             return;
         }
 
         event.preventDefault();
-        onAssigneeSortToggle();
+        onSortToggle(column.id);
     }
 
     function handleFilterButtonMouseDown(event) {
@@ -140,21 +231,35 @@ export default function TaskList(props) {
         event.stopPropagation();
     }
 
-    function handleFilterButtonClick(event) {
+    function handleFilterButtonClick(event, column) {
         event.stopPropagation();
-        setFilterAnchorElement(event.currentTarget);
+        setFilterMenuState({
+            anchorElement: event.currentTarget,
+            columnId: column.id,
+        });
     }
 
     function handleFilterMenuClose() {
-        setFilterAnchorElement(null);
+        setFilterMenuState({
+            anchorElement: null,
+            columnId: null,
+        });
     }
 
-    function handleAssigneeFilterClick(assigneeLabel) {
-        onAssigneeFilterToggle(assigneeLabel);
+    function handleFilterClick(filterValue) {
+        if (!activeFilterColumn) {
+            return;
+        }
+
+        onFilterToggle(activeFilterColumn.id, filterValue);
     }
 
-    function handleAssigneeFiltersClear() {
-        onAssigneeFiltersClear();
+    function handleFiltersClear() {
+        if (!activeFilterColumn) {
+            return;
+        }
+
+        onFiltersClear(activeFilterColumn.id);
         handleFilterMenuClose();
     }
 
@@ -181,148 +286,244 @@ export default function TaskList(props) {
     }
 
     return (
-        <Box
-            ref={panelRef}
-            className={getTaskListPanelClassName(isCollapsed)}
-            onMouseDown={handleTaskListMouseDown}
-            onScroll={onPanelScroll}
-        >
+        <Box className={getTaskListPanelClassName(isCollapsed)}>
             <Box
-                className="task-list-header"
-                sx={{ height: `${headerHeight}px` }}
-                onMouseDown={handleTaskListHeaderMouseDown}
+                ref={panelRef}
+                className="task-list-scroll-surface"
+                sx={{
+                    minWidth: `${gridMinimumWidth}px`,
+                }}
+                onMouseDown={handleTaskListMouseDown}
+                onScroll={onPanelScroll}
             >
-                <Typography className="task-list-cell task-list-heading" component="div">
-                    Task Name
-                </Typography>
                 <Box
-                    className="task-list-cell task-list-heading task-list-assignee-heading"
-                    role="button"
-                    tabIndex={0}
-                    aria-sort={getAssigneeSortAriaValue(assigneeSortDirection)}
-                    onClick={handleAssigneeHeaderClick}
-                    onKeyDown={handleAssigneeHeaderKeyDown}
+                    className="task-list-header"
+                    sx={{
+                        height: `${headerHeight}px`,
+                        ...taskListGridStyle,
+                    }}
+                    onMouseDown={handleTaskListHeaderMouseDown}
+                    onContextMenu={handleTaskListHeaderContextMenu}
                 >
-                    <Typography className="task-list-heading-label">
-                        Assignee
-                    </Typography>
-                    {getAssigneeSortIcon(assigneeSortDirection)}
-                    <Tooltip title="Filter by assignee">
-                        <IconButton
-                            size="small"
-                            className="task-list-filter-button"
-                            color={isAssigneeFilterActive ? "primary" : "default"}
-                            aria-label="Filter by assignee"
-                            aria-haspopup="menu"
-                            aria-expanded={isFilterMenuOpen ? "true" : undefined}
-                            onMouseDown={handleFilterButtonMouseDown}
-                            onKeyDown={handleFilterButtonKeyDown}
-                            onClick={handleFilterButtonClick}
-                        >
-                            <FilterListIcon fontSize="inherit" />
-                        </IconButton>
-                    </Tooltip>
+                    {columns.map(function renderHeaderColumn(column) {
+                        const isFilterActive = hasActiveFilter(
+                            selectedFiltersByColumn,
+                            column.id,
+                        );
+
+                        return (
+                            <Box
+                                key={column.id}
+                                className={getHeaderCellClassName(column)}
+                                role={column.canSort ? "button" : undefined}
+                                tabIndex={column.canSort ? 0 : undefined}
+                                aria-sort={getColumnSortAriaValue(column, sortState)}
+                                onClick={function sortColumn() {
+                                    handleHeaderCellClick(column);
+                                }}
+                                onKeyDown={function sortColumnWithKeyboard(event) {
+                                    handleHeaderCellKeyDown(event, column);
+                                }}
+                            >
+                                <Typography className="task-list-heading-label">
+                                    {column.label}
+                                </Typography>
+                                {getColumnSortIcon(column, sortState)}
+                                {column.canFilter && (
+                                    <Tooltip
+                                        title={`Filter by ${column.label.toLocaleLowerCase()}`}
+                                    >
+                                        <IconButton
+                                            size="small"
+                                            className="task-list-filter-button"
+                                            color={isFilterActive ? "primary" : "default"}
+                                            aria-label={`Filter by ${column.label}`}
+                                            aria-haspopup="menu"
+                                            aria-expanded={isFilterMenuOpen ? "true" : undefined}
+                                            onMouseDown={handleFilterButtonMouseDown}
+                                            onKeyDown={handleFilterButtonKeyDown}
+                                            onClick={function openFilterMenu(event) {
+                                                handleFilterButtonClick(event, column);
+                                            }}
+                                        >
+                                            <FilterAltIcon fontSize="inherit" />
+                                        </IconButton>
+                                    </Tooltip>
+                                )}
+                            </Box>
+                        );
+                    })}
                 </Box>
+                <List disablePadding>
+                    {tasks.map(function renderTask(task) {
+                        const isSelected = selectedTaskIds.includes(task.id);
+                        const isHighlighted = highlightedTaskId === task.id || isSelected;
+                        const rowClassName = getTaskListRowClassName(isHighlighted);
+
+                        return (
+                            <ListItemButton
+                                key={task.id}
+                                data-task-id={task.id}
+                                disableRipple
+                                selected={isSelected}
+                                className={rowClassName}
+                                sx={taskListGridStyle}
+                                onClick={function selectTask(event) {
+                                    handleTaskSelection(event, task);
+                                }}
+                            >
+                                {columns.map(function renderTaskColumn(column) {
+                                    return (
+                                        <TaskListCell
+                                            key={column.id}
+                                            task={task}
+                                            column={column}
+                                            assigneeColorMap={assigneeColorMap}
+                                        />
+                                    );
+                                })}
+                            </ListItemButton>
+                        );
+                    })}
+                </List>
+                {fillerRowHeight > 0 && (
+                    <Box
+                        className="task-list-filler"
+                        aria-hidden="true"
+                        sx={{ height: `${fillerRowHeight}px` }}
+                    />
+                )}
             </Box>
             <Menu
-                anchorEl={filterAnchorElement}
+                anchorEl={filterMenuState.anchorElement}
                 open={isFilterMenuOpen}
                 onClose={handleFilterMenuClose}
                 MenuListProps={{
                     className: "task-list-filter-menu",
-                    "aria-label": "Assignee filters",
+                    "aria-label": getFilterMenuAriaLabel(activeFilterColumn),
                 }}
             >
-                {assigneeFilterOptions.length === 0 && (
+                {activeFilterOptions.length === 0 && (
                     <MenuItem disabled>
-                        <ListItemText primary="No assignees" />
+                        <ListItemText primary={getEmptyFilterMessage(activeFilterColumn)} />
                     </MenuItem>
                 )}
-                {assigneeFilterOptions.map(function renderAssigneeFilterOption(assigneeLabel) {
-                    const isSelected = selectedAssigneeFilters.includes(assigneeLabel);
+                {activeFilterOptions.map(function renderFilterOption(filterValue) {
+                    const isSelected = activeSelectedFilters.includes(filterValue);
 
                     return (
                         <MenuItem
-                            key={assigneeLabel}
-                            onClick={function toggleAssigneeFilter() {
-                                handleAssigneeFilterClick(assigneeLabel);
+                            key={filterValue}
+                            onClick={function toggleFilter() {
+                                handleFilterClick(filterValue);
                             }}
                         >
                             <Checkbox checked={isSelected} />
-                            <ListItemText primary={assigneeLabel} />
+                            <ListItemText primary={filterValue} />
                         </MenuItem>
                     );
                 })}
-                {isAssigneeFilterActive && (
-                    <MenuItem onClick={handleAssigneeFiltersClear}>
+                {activeSelectedFilters.length > 0 && (
+                    <MenuItem onClick={handleFiltersClear}>
                         <ListItemText primary="Clear filter" />
                     </MenuItem>
                 )}
             </Menu>
-            <List disablePadding>
-                {tasks.map(function renderTask(task) {
-                    const isSelected = selectedTaskIds.includes(task.id);
-                    const isHighlighted = highlightedTaskId === task.id || isSelected;
-                    const rowClassName = getTaskListRowClassName(isHighlighted);
-                    const assigneeLabel = getAssigneeLabel(task);
-                    const avatarInitials = getAssigneeInitials(assigneeLabel);
-                    const avatarTitle = getAssigneeAvatarTitle(assigneeLabel);
+            <Menu
+                anchorReference="anchorPosition"
+                anchorPosition={columnMenuPosition}
+                open={isColumnMenuOpen}
+                onClose={handleColumnMenuClose}
+                MenuListProps={{
+                    className: "task-list-column-menu",
+                    "aria-label": "Task list columns",
+                }}
+            >
+                {allColumns.filter(function isHideableColumn(column) {
+                    return column.canHide;
+                }).map(function renderColumnMenuItem(column) {
+                    const isVisible = Boolean(columnVisibility[column.id]);
+                    const className = isVisible
+                        ? "task-list-column-menu-item"
+                        : "task-list-column-menu-item task-list-column-menu-item-hidden";
 
                     return (
-                        <ListItemButton
-                            key={task.id}
-                            data-task-id={task.id}
-                            disableRipple
-                            selected={isSelected}
-                            className={rowClassName}
-                            onClick={function selectTask(event) {
-                                handleTaskSelection(event, task);
+                        <MenuItem
+                            key={column.id}
+                            className={className}
+                            onClick={function toggleColumnVisibility() {
+                                handleColumnVisibilityClick(column.id);
                             }}
                         >
-                            <Box className="task-list-cell task-list-name-cell">
-                                {/* MUI Avatar keeps the assignee identity compact within the fixed task row height. */}
-                                <Avatar
-                                    className="task-assignee-avatar"
-                                    title={avatarTitle}
-                                    aria-label={avatarTitle}
-                                    sx={{
-                                        backgroundColor: getAssigneeAvatarColor(
-                                            assigneeLabel,
-                                            assigneeColorMap,
-                                        ),
-                                    }}
-                                >
-                                    {avatarInitials}
-                                </Avatar>
-                                <Typography className="task-list-name" title={task.name}>
-                                    {task.name}
-                                </Typography>
-                            </Box>
-                            <Box className="task-list-cell task-list-assignee-cell">
-                                <Typography className="task-list-assignee" title={assigneeLabel}>
-                                    {assigneeLabel}
-                                </Typography>
-                            </Box>
-                        </ListItemButton>
+                            <ListItemText primary={column.label} />
+                        </MenuItem>
                     );
                 })}
-            </List>
-            {fillerRowHeight > 0 && (
-                <Box
-                    className="task-list-filler"
-                    aria-hidden="true"
-                    sx={{ height: `${fillerRowHeight}px` }}
-                />
-            )}
+            </Menu>
             <Box
                 className="task-list-resize-handle"
                 role="separator"
                 aria-orientation="vertical"
                 aria-label="Resize task list"
+                onDoubleClick={handleResizeDoubleClick}
                 onMouseDown={handleResizeMouseDown}
             />
         </Box>
     );
+}
+
+
+function TaskListCell(props) {
+    const {
+        assigneeColorMap,
+        column,
+        task,
+    } = props;
+
+    if (column.id === "name") {
+        const assigneeLabel = getTaskAssigneeLabel(task);
+        const avatarInitials = getAssigneeInitials(assigneeLabel);
+        const avatarTitle = getAssigneeAvatarTitle(assigneeLabel);
+
+        return (
+            <Box className="task-list-cell task-list-name-cell">
+                {/* MUI Avatar keeps task identity compact within the fixed task row height. */}
+                <Avatar
+                    className="task-assignee-avatar"
+                    title={avatarTitle}
+                    aria-label={avatarTitle}
+                    sx={{
+                        backgroundColor: getAssigneeAvatarColor(
+                            assigneeLabel,
+                            assigneeColorMap,
+                        ),
+                    }}
+                >
+                    {avatarInitials}
+                </Avatar>
+                <Typography className="task-list-name" title={task.name}>
+                    {task.name}
+                </Typography>
+            </Box>
+        );
+    }
+
+    const displayValue = getTaskListColumnDisplayValue(task, column.id);
+
+    return (
+        <Box className="task-list-cell task-list-value-cell">
+            <Typography className="task-list-value" title={displayValue}>
+                {displayValue}
+            </Typography>
+        </Box>
+    );
+}
+
+
+function getTaskListGridTemplateColumns(columns) {
+    return columns.map(function mapColumnWidth(column) {
+        return column.width;
+    }).join(" ");
 }
 
 
@@ -335,12 +536,27 @@ function getTaskListPanelClassName(isCollapsed) {
 }
 
 
-function getAssigneeSortIcon(assigneeSortDirection) {
-    if (assigneeSortDirection === ASSIGNEE_SORT_ASCENDING) {
+function getHeaderCellClassName(column) {
+    const classNames = ["task-list-cell", "task-list-heading"];
+
+    if (column.canSort) {
+        classNames.push("task-list-sortable-heading");
+    }
+
+    return classNames.join(" ");
+}
+
+
+function getColumnSortIcon(column, sortState) {
+    if (sortState.columnId !== column.id) {
+        return null;
+    }
+
+    if (sortState.direction === TASK_LIST_SORT_ASCENDING) {
         return <ArrowUpwardIcon className="task-list-sort-icon" fontSize="inherit" />;
     }
 
-    if (assigneeSortDirection === ASSIGNEE_SORT_DESCENDING) {
+    if (sortState.direction === TASK_LIST_SORT_DESCENDING) {
         return <ArrowDownwardIcon className="task-list-sort-icon" fontSize="inherit" />;
     }
 
@@ -348,16 +564,45 @@ function getAssigneeSortIcon(assigneeSortDirection) {
 }
 
 
-function getAssigneeSortAriaValue(assigneeSortDirection) {
-    if (assigneeSortDirection === ASSIGNEE_SORT_ASCENDING) {
+function getColumnSortAriaValue(column, sortState) {
+    if (sortState.columnId !== column.id) {
+        return undefined;
+    }
+
+    if (sortState.direction === TASK_LIST_SORT_ASCENDING) {
         return "ascending";
     }
 
-    if (assigneeSortDirection === ASSIGNEE_SORT_DESCENDING) {
+    if (sortState.direction === TASK_LIST_SORT_DESCENDING) {
         return "descending";
     }
 
-    return ASSIGNEE_SORT_NONE;
+    return TASK_LIST_SORT_NONE;
+}
+
+
+function hasActiveFilter(selectedFiltersByColumn, columnId) {
+    const selectedFilters = selectedFiltersByColumn[columnId] || [];
+
+    return selectedFilters.length > 0;
+}
+
+
+function getFilterMenuAriaLabel(activeFilterColumn) {
+    if (!activeFilterColumn) {
+        return "Task list filters";
+    }
+
+    return `${activeFilterColumn.label} filters`;
+}
+
+
+function getEmptyFilterMessage(activeFilterColumn) {
+    if (!activeFilterColumn) {
+        return "No values";
+    }
+
+    return `No ${activeFilterColumn.label.toLocaleLowerCase()} values`;
 }
 
 
@@ -375,18 +620,6 @@ function getTaskListRowClassName(isHovered) {
     }
 
     return "task-list-row";
-}
-
-
-function getAssigneeLabel(task) {
-    const assigneeLabel = task.assignee || EMPTY_ASSIGNEE_LABEL;
-    const trimmedAssigneeLabel = assigneeLabel.trim();
-
-    if (!trimmedAssigneeLabel) {
-        return UNASSIGNED_ASSIGNEE_LABEL;
-    }
-
-    return trimmedAssigneeLabel;
 }
 
 

@@ -16,6 +16,11 @@ export async function listAssignees() {
 }
 
 
+export async function listProjectNames() {
+    return sendJsonRequest("/api/project-name");
+}
+
+
 export async function createTask(task) {
     return sendJsonRequest("/api/tasks", {
         method: "POST",
@@ -70,6 +75,14 @@ export async function replaceAssignees(assigneeUpdate) {
     return sendJsonRequest("/api/assignees", {
         method: "PUT",
         body: JSON.stringify(assigneeUpdate),
+    });
+}
+
+
+export async function replaceProjectNames(projectUpdate) {
+    return sendJsonRequest("/api/project-name", {
+        method: "PUT",
+        body: JSON.stringify(projectUpdate),
     });
 }
 

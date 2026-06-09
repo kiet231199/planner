@@ -11,6 +11,7 @@ UNASSIGNED_ASSIGNEE = "Unassigned"
 DAY_OFF_ALL_ASSIGNEES = "All"
 DEFAULT_TASK_LEVEL = "Level 1"
 RELEASE_TASK_TYPE = "Release"
+NO_PROJECT_NAME = "..."
 RESERVED_ASSIGNEE_NAMES = {
     UNASSIGNED_ASSIGNEE.casefold(),
     DAY_OFF_ALL_ASSIGNEES.casefold(),
@@ -22,6 +23,7 @@ class TaskCreate(BaseModel):
     description: Optional[str] = None
     url: Optional[str] = None
     assignee: Optional[str] = None
+    projectName: str = NO_PROJECT_NAME
     taskType: str = Field(min_length=1)
     taskLevel: Optional[str] = None
     startDate: date
@@ -52,6 +54,16 @@ class TaskCreate(BaseModel):
 
         if not trimmed_value:
             return None
+
+        return trimmed_value
+
+    @field_validator("projectName")
+    @classmethod
+    def normalize_project_name(cls, value: str) -> str:
+        trimmed_value = value.strip()
+
+        if not trimmed_value:
+            return NO_PROJECT_NAME
 
         return trimmed_value
 
@@ -229,10 +241,65 @@ class AssigneeListUpdate(BaseModel):
         return list(dict.fromkeys(normalized_names))
 
 
+class ProjectName(BaseModel):
+    name: str = Field(min_length=1)
+    backgroundColor: str = Field(pattern=HEX_COLOR_PATTERN)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return normalize_text_value(value)
+
+    @field_validator("backgroundColor")
+    @classmethod
+    def normalize_background_color(cls, value: str) -> str:
+        return value.strip()
+
+
+class ProjectRename(BaseModel):
+    previousName: str = Field(min_length=1)
+    nextName: str = Field(min_length=1)
+
+    @field_validator("previousName", "nextName")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        return normalize_text_value(value)
+
+
+class ProjectNameListUpdate(BaseModel):
+    project_name: list[ProjectName]
+    renamedProjects: list[ProjectRename] = Field(default_factory=list)
+    deletedProjects: list[str] = Field(default_factory=list)
+
+    @field_validator("project_name")
+    @classmethod
+    def validate_unique_project_names(cls, value: list[ProjectName]) -> list[ProjectName]:
+        project_name_keys = [project_name.name.casefold() for project_name in value]
+
+        if len(set(project_name_keys)) != len(project_name_keys):
+            raise ValueError("Project names must be unique.")
+
+        return value
+
+    @field_validator("deletedProjects")
+    @classmethod
+    def normalize_deleted_projects(cls, value: list[str]) -> list[str]:
+        normalized_names = []
+
+        for project_name in value:
+            normalized_name = project_name.strip()
+
+            if normalized_name:
+                normalized_names.append(normalized_name)
+
+        return list(dict.fromkeys(normalized_names))
+
+
 class PlannerData(BaseModel):
     tasks: list[Task]
     dayOffs: list[DayOff]
     assignees: list[Assignee]
+    project_name: list[ProjectName]
 
 
 def normalize_text_value(value: str) -> str:

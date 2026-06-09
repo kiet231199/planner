@@ -13,6 +13,7 @@ import {
 import {
     DAY_OFF_ALL_ASSIGNEES,
     DEFAULT_TASK_TYPE_COLOR,
+    NO_PROJECT_NAME,
     RELEASE_TASK_TYPE,
     TASK_TYPE_COLORS,
 } from "../constants/taskOptions";
@@ -62,8 +63,26 @@ const EVENT_MARKER_SIZE_PIXELS = 34;
 const EVENT_MARKER_COLUMN_NORMAL = "normal";
 const EVENT_MARKER_COLUMN_WEEKEND = "weekend";
 const EVENT_MARKER_COLUMN_TODAY = "today";
+const EVENT_FLAG_LIGHT_TEXT_COLOR = "#ffffff";
+const EVENT_FLAG_DARK_TEXT_COLOR = "#1f2937";
 const COMPLETED_PROGRESS_PERCENT = 100;
 const PERCENT_DIVISOR = 100;
+const HEX_COLOR_LENGTH = 7;
+const HEX_COLOR_RADIX = 16;
+const HEX_RED_START_INDEX = 1;
+const HEX_GREEN_START_INDEX = 3;
+const HEX_BLUE_START_INDEX = 5;
+const HEX_CHANNEL_LENGTH = 2;
+const RGB_MAX_CHANNEL_VALUE = 255;
+const LINEAR_RGB_THRESHOLD = 0.03928;
+const LINEAR_RGB_DIVISOR = 12.92;
+const GAMMA_RGB_OFFSET = 0.055;
+const GAMMA_RGB_DIVISOR = 1.055;
+const GAMMA_RGB_EXPONENT = 2.4;
+const RED_LUMINANCE_WEIGHT = 0.2126;
+const GREEN_LUMINANCE_WEIGHT = 0.7152;
+const BLUE_LUMINANCE_WEIGHT = 0.0722;
+const CONTRAST_RATIO_OFFSET = 0.05;
 const MINIMUM_TASK_DURATION_DAYS = 1;
 const NO_ELAPSED_TASK_DAYS = 0;
 const INITIAL_VISIBLE_TIMELINE_RANGE = {
@@ -84,6 +103,7 @@ export default function TimelineChart(props) {
         panelRef: externalPanelRef,
         tasks,
         dayOffs = [],
+        projectNames = [],
         cutTaskIds = [],
         highlightedTaskId,
         isLoading,
@@ -202,9 +222,12 @@ export default function TimelineChart(props) {
     const dayOffHighlights = useMemo(function memoizeDayOffHighlights() {
         return getDayOffHighlights(dayOffs, tasks, metrics);
     }, [dayOffs, metrics, tasks]);
+    const projectColorMap = useMemo(function memoizeProjectColorMap() {
+        return getProjectColorMap(projectNames);
+    }, [projectNames]);
     const eventGroups = useMemo(function memoizeEventGroups() {
-        return getReleaseEventGroups(tasks, metrics);
-    }, [metrics, tasks]);
+        return getReleaseEventGroups(tasks, metrics, projectColorMap);
+    }, [metrics, projectColorMap, tasks]);
     metricsRef.current = metrics;
     tasksRef.current = tasks;
 
@@ -1597,6 +1620,12 @@ export default function TimelineChart(props) {
                             </Typography>
                             <Box className="task-hover-bubble-grid">
                                 <Typography className="task-hover-bubble-label">
+                                    Task type
+                                </Typography>
+                                <Typography className="task-hover-bubble-value">
+                                    {getTaskTypeLabel(taskHoverBubble.task)}
+                                </Typography>
+                                <Typography className="task-hover-bubble-label">
                                     Assignee
                                 </Typography>
                                 <Typography className="task-hover-bubble-value">
@@ -1678,6 +1707,7 @@ export default function TimelineChart(props) {
                                             <Box
                                                 key={eventItem.id}
                                                 className="timeline-event-flag"
+                                                sx={getEventFlagStyle(eventItem)}
                                             >
                                                 <Box
                                                     component="span"
@@ -1696,6 +1726,11 @@ export default function TimelineChart(props) {
             </Box>
         </Box>
     );
+}
+
+
+function getTaskTypeLabel(task) {
+    return task.taskType || "Unknown";
 }
 
 
@@ -1847,7 +1882,7 @@ function getDayOffHighlights(dayOffs, tasks, metrics) {
 }
 
 
-function getReleaseEventGroups(tasks, metrics) {
+function getReleaseEventGroups(tasks, metrics, projectColorMap) {
     const eventGroups = [];
     const eventGroupMap = new Map();
 
@@ -1886,10 +1921,128 @@ function getReleaseEventGroups(tasks, metrics) {
         eventGroup.events.push({
             id: task.id,
             name: task.name,
+            backgroundColor: getReleaseEventFlagBackgroundColor(task, projectColorMap),
         });
     });
 
     return eventGroups;
+}
+
+
+function getReleaseEventFlagBackgroundColor(task, projectColorMap) {
+    if (!task.projectName || task.projectName === NO_PROJECT_NAME) {
+        return undefined;
+    }
+
+    return projectColorMap.get(task.projectName);
+}
+
+
+function getEventFlagStyle(eventItem) {
+    if (!eventItem.backgroundColor) {
+        return undefined;
+    }
+
+    return {
+        "--planner-event-flag-background-color": eventItem.backgroundColor,
+        "--planner-event-flag-text-color": getReadableEventFlagTextColor(
+            eventItem.backgroundColor,
+        ),
+    };
+}
+
+
+function getReadableEventFlagTextColor(backgroundColor) {
+    const backgroundLuminance = getHexColorLuminance(backgroundColor);
+
+    if (backgroundLuminance === null) {
+        return undefined;
+    }
+
+    const lightTextContrast = getContrastRatio(
+        backgroundLuminance,
+        getHexColorLuminance(EVENT_FLAG_LIGHT_TEXT_COLOR),
+    );
+    const darkTextContrast = getContrastRatio(
+        backgroundLuminance,
+        getHexColorLuminance(EVENT_FLAG_DARK_TEXT_COLOR),
+    );
+
+    if (darkTextContrast >= lightTextContrast) {
+        return EVENT_FLAG_DARK_TEXT_COLOR;
+    }
+
+    return EVENT_FLAG_LIGHT_TEXT_COLOR;
+}
+
+
+function getContrastRatio(firstLuminance, secondLuminance) {
+    const lighterLuminance = Math.max(firstLuminance, secondLuminance);
+    const darkerLuminance = Math.min(firstLuminance, secondLuminance);
+
+    return (
+        (lighterLuminance + CONTRAST_RATIO_OFFSET)
+        / (darkerLuminance + CONTRAST_RATIO_OFFSET)
+    );
+}
+
+
+function getHexColorLuminance(hexColor) {
+    const normalizedHexColor = hexColor.trim();
+
+    if (!isFullHexColor(normalizedHexColor)) {
+        return null;
+    }
+
+    const redChannel = getLinearRgbChannel(
+        normalizedHexColor,
+        HEX_RED_START_INDEX,
+    );
+    const greenChannel = getLinearRgbChannel(
+        normalizedHexColor,
+        HEX_GREEN_START_INDEX,
+    );
+    const blueChannel = getLinearRgbChannel(
+        normalizedHexColor,
+        HEX_BLUE_START_INDEX,
+    );
+
+    return (
+        RED_LUMINANCE_WEIGHT * redChannel
+        + GREEN_LUMINANCE_WEIGHT * greenChannel
+        + BLUE_LUMINANCE_WEIGHT * blueChannel
+    );
+}
+
+
+function isFullHexColor(hexColor) {
+    if (hexColor.length !== HEX_COLOR_LENGTH) {
+        return false;
+    }
+
+    return /^#[0-9A-Fa-f]{6}$/.test(hexColor);
+}
+
+
+function getLinearRgbChannel(hexColor, startIndex) {
+    const channelHex = hexColor.slice(startIndex, startIndex + HEX_CHANNEL_LENGTH);
+    const encodedChannel = parseInt(channelHex, HEX_COLOR_RADIX) / RGB_MAX_CHANNEL_VALUE;
+
+    if (encodedChannel <= LINEAR_RGB_THRESHOLD) {
+        return encodedChannel / LINEAR_RGB_DIVISOR;
+    }
+
+    return Math.pow(
+        (encodedChannel + GAMMA_RGB_OFFSET) / GAMMA_RGB_DIVISOR,
+        GAMMA_RGB_EXPONENT,
+    );
+}
+
+
+function getProjectColorMap(projectNames) {
+    return new Map(projectNames.map(function mapProjectColor(projectName) {
+        return [projectName.name, projectName.backgroundColor];
+    }));
 }
 
 

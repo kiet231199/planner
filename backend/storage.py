@@ -15,7 +15,11 @@ from models import (
     DAY_OFF_ALL_ASSIGNEES,
     DayOff,
     DayOffBulkCreate,
+    NO_PROJECT_NAME,
     PlannerData,
+    ProjectName,
+    ProjectNameListUpdate,
+    ProjectRename,
     Task,
     TaskCreate,
     UNASSIGNED_ASSIGNEE,
@@ -41,6 +45,10 @@ def list_day_offs() -> list[DayOff]:
 
 def list_assignees() -> list[Assignee]:
     return _read_assignees()
+
+
+def list_project_names() -> list[ProjectName]:
+    return _read_project_names()
 
 
 def create_task(task_create: TaskCreate, after_task_id: str | None = None) -> Task:
@@ -139,6 +147,7 @@ def delete_day_offs(day_off_dates: list[date]) -> list[DayOff]:
 def replace_assignees(assignee_list_update: AssigneeListUpdate) -> PlannerData:
     tasks = _read_tasks()
     day_offs = _read_day_offs()
+    project_names = _read_project_names()
     assignees = assignee_list_update.assignees
     renamed_assignees = _get_assignee_rename_map(
         assignee_list_update.renamedAssignees,
@@ -160,12 +169,45 @@ def replace_assignees(assignee_list_update: AssigneeListUpdate) -> PlannerData:
         "tasks": [_serialize_task(task) for task in updated_tasks],
         "dayOffs": [_serialize_day_off(day_off) for day_off in updated_day_offs],
         "assignees": [_serialize_assignee(assignee) for assignee in assignees],
+        "project_name": [_serialize_project_name(project_name) for project_name in project_names],
     })
 
     return PlannerData(
         tasks=updated_tasks,
         dayOffs=updated_day_offs,
         assignees=assignees,
+        project_name=project_names,
+    )
+
+
+def replace_project_names(project_name_list_update: ProjectNameListUpdate) -> PlannerData:
+    tasks = _read_tasks()
+    day_offs = _read_day_offs()
+    assignees = _read_assignees()
+    project_names = project_name_list_update.project_name
+    renamed_projects = _get_project_rename_map(
+        project_name_list_update.renamedProjects,
+        project_names,
+    )
+    deleted_projects = set(project_name_list_update.deletedProjects)
+    updated_tasks = _apply_project_changes_to_tasks(
+        tasks,
+        renamed_projects,
+        deleted_projects,
+    )
+
+    _write_data_payload({
+        "tasks": [_serialize_task(task) for task in updated_tasks],
+        "dayOffs": [_serialize_day_off(day_off) for day_off in day_offs],
+        "assignees": [_serialize_assignee(assignee) for assignee in assignees],
+        "project_name": [_serialize_project_name(project_name) for project_name in project_names],
+    })
+
+    return PlannerData(
+        tasks=updated_tasks,
+        dayOffs=day_offs,
+        assignees=assignees,
+        project_name=project_names,
     )
 
 
@@ -235,6 +277,25 @@ def _read_assignees() -> list[Assignee]:
         ) from error
 
 
+def _read_project_names() -> list[ProjectName]:
+    payload = _read_data_payload()
+    raw_project_names = _extract_raw_project_names(payload)
+
+    try:
+        project_names = [
+            ProjectName.model_validate(raw_project_name)
+            for raw_project_name in raw_project_names
+        ]
+        ProjectNameListUpdate(project_name=project_names)
+
+        return project_names
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Task data file contains invalid project records.",
+        ) from error
+
+
 def _write_tasks(tasks: list[Task]) -> None:
     payload = _read_data_payload()
     payload["tasks"] = [_serialize_task(task) for task in tasks]
@@ -279,6 +340,7 @@ def _write_data_payload(payload: dict[str, Any]) -> None:
         "tasks": payload.get("tasks", []),
         "dayOffs": payload.get("dayOffs", []),
         "assignees": payload.get("assignees", _serialize_assignees(DEFAULT_ASSIGNEES)),
+        "project_name": payload.get("project_name", []),
     }
 
     _write_normalized_data_payload(normalized_payload)
@@ -305,6 +367,7 @@ def _get_default_data_payload() -> dict[str, Any]:
         "tasks": [],
         "dayOffs": [],
         "assignees": _serialize_assignees(DEFAULT_ASSIGNEES),
+        "project_name": [],
     }
 
 
@@ -314,12 +377,14 @@ def _normalize_read_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], bo
             "tasks": payload.get("tasks", []),
             "dayOffs": payload.get("dayOffs", []),
             "assignees": payload.get("assignees", []),
-        }, False
+            "project_name": payload.get("project_name", []),
+        }, "project_name" not in payload
 
     return {
         "tasks": [],
         "dayOffs": payload.get("dayOffs", []),
         "assignees": _serialize_assignees(DEFAULT_ASSIGNEES),
+        "project_name": [],
     }, True
 
 
@@ -368,6 +433,21 @@ def _extract_raw_assignees(payload: Any) -> list[dict[str, Any]]:
     return raw_assignees
 
 
+def _extract_raw_project_names(payload: Any) -> list[dict[str, Any]]:
+    raw_project_names = payload.get("project_name")
+
+    if raw_project_names is None:
+        return []
+
+    if not isinstance(raw_project_names, list):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Task data file must contain a project_name list.",
+        )
+
+    return raw_project_names
+
+
 def _serialize_task(task: Task) -> dict[str, Any]:
     return task.model_dump(mode="json")
 
@@ -382,6 +462,10 @@ def _serialize_assignee(assignee: Assignee) -> dict[str, Any]:
 
 def _serialize_assignees(assignees: list[Assignee]) -> list[dict[str, Any]]:
     return [_serialize_assignee(assignee) for assignee in assignees]
+
+
+def _serialize_project_name(project_name: ProjectName) -> dict[str, Any]:
+    return project_name.model_dump(mode="json")
 
 
 def _get_assignee_rename_map(
@@ -402,6 +486,28 @@ def _get_assignee_rename_map(
             continue
 
         rename_map[renamed_assignee.previousName] = renamed_assignee.nextName
+
+    return rename_map
+
+
+def _get_project_rename_map(
+    renamed_projects: list[ProjectRename],
+    updated_project_names: list[ProjectName],
+) -> dict[str, str]:
+    updated_names = {
+        project_name.name
+        for project_name in updated_project_names
+    }
+    rename_map = {}
+
+    for renamed_project in renamed_projects:
+        if renamed_project.nextName not in updated_names:
+            continue
+
+        if renamed_project.previousName == renamed_project.nextName:
+            continue
+
+        rename_map[renamed_project.previousName] = renamed_project.nextName
 
     return rename_map
 
@@ -450,6 +556,49 @@ def _get_updated_task_assignee(
         return UNASSIGNED_ASSIGNEE
 
     return assignee
+
+
+def _apply_project_changes_to_tasks(
+    tasks: list[Task],
+    renamed_projects: dict[str, str],
+    deleted_projects: set[str],
+) -> list[Task]:
+    updated_tasks = []
+
+    for task in tasks:
+        next_project_name = _get_updated_task_project_name(
+            task.projectName,
+            renamed_projects,
+            deleted_projects,
+        )
+
+        if next_project_name == task.projectName:
+            updated_tasks.append(task)
+            continue
+
+        updated_tasks.append(Task(
+            id=task.id,
+            **{
+                **task.model_dump(exclude={"id"}),
+                "projectName": next_project_name,
+            },
+        ))
+
+    return updated_tasks
+
+
+def _get_updated_task_project_name(
+    project_name: str,
+    renamed_projects: dict[str, str],
+    deleted_projects: set[str],
+) -> str:
+    if project_name in renamed_projects:
+        return renamed_projects[project_name]
+
+    if project_name in deleted_projects:
+        return NO_PROJECT_NAME
+
+    return project_name
 
 
 def _apply_assignee_changes_to_day_offs(

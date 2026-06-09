@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import AccountTreeOutlinedIcon from "@mui/icons-material/AccountTreeOutlined";
 import ManageAccountsOutlinedIcon from "@mui/icons-material/ManageAccountsOutlined";
 import {
     Box,
@@ -15,9 +16,11 @@ import {
 } from "@mui/material";
 
 import AssigneeManagerDialog from "./AssigneeManagerDialog";
+import ProjectManagerDialog from "./ProjectManagerDialog";
 import {
     DEFAULT_TASK_LEVEL,
     DEFAULT_TASK_TYPE,
+    NO_PROJECT_NAME,
     RELEASE_TASK_TYPE,
     TASK_LEVEL_OPTIONS,
     TASK_TYPE_OPTIONS,
@@ -30,6 +33,7 @@ const DEFAULT_FORM_VALUES = {
     description: "",
     url: "",
     assignee: UNASSIGNED_ASSIGNEE,
+    projectName: NO_PROJECT_NAME,
     taskType: DEFAULT_TASK_TYPE,
     taskLevel: DEFAULT_TASK_LEVEL,
     startDate: "",
@@ -62,9 +66,12 @@ export default function TaskForm(props) {
         initialTasks = [],
         isSaving,
         assignees = [],
+        projectNames = [],
         isAssigneeSaving,
+        isProjectSaving,
         onCancel,
         onSaveAssignees,
+        onSaveProjectNames,
         onSubmitTask,
     } = props;
     const editTasks = getEditTasks(initialTask, initialTasks);
@@ -81,9 +88,13 @@ export default function TaskForm(props) {
         return new Set();
     });
     const [isAssigneeManagerOpen, setIsAssigneeManagerOpen] = useState(false);
+    const [isProjectManagerOpen, setIsProjectManagerOpen] = useState(false);
     const assigneeOptions = useMemo(function memoizeAssigneeOptions() {
         return getAssigneeOptions(assignees);
     }, [assignees]);
+    const projectOptions = useMemo(function memoizeProjectOptions() {
+        return getProjectOptions(projectNames);
+    }, [projectNames]);
     const isReleaseTask = formValues.taskType === RELEASE_TASK_TYPE;
     const shouldShowDateRangeFields = shouldShowTaskDateRangeFields(
         isBulkEditMode,
@@ -110,6 +121,23 @@ export default function TaskForm(props) {
             };
         });
     }, [assigneeOptions]);
+
+    useEffect(function keepSelectedProjectSupported() {
+        setFormValues(function updateUnsupportedProject(currentValues) {
+            if (currentValues.projectName === MIXED_SELECT_VALUE) {
+                return currentValues;
+            }
+
+            if (projectOptions.includes(currentValues.projectName)) {
+                return currentValues;
+            }
+
+            return {
+                ...currentValues,
+                projectName: NO_PROJECT_NAME,
+            };
+        });
+    }, [projectOptions]);
 
     function handleFieldChange(event) {
         const { name, value } = event.target;
@@ -237,6 +265,14 @@ export default function TaskForm(props) {
         setIsAssigneeManagerOpen(false);
     }
 
+    function handleOpenProjectManager() {
+        setIsProjectManagerOpen(true);
+    }
+
+    function handleCloseProjectManager() {
+        setIsProjectManagerOpen(false);
+    }
+
     async function handleSaveAssignees(assigneeUpdate) {
         const saveResult = await onSaveAssignees(assigneeUpdate);
 
@@ -252,6 +288,27 @@ export default function TaskForm(props) {
             return {
                 ...currentValues,
                 assignee: getUpdatedSelectedAssignee(currentValues.assignee, assigneeUpdate),
+            };
+        });
+
+        return saveResult;
+    }
+
+    async function handleSaveProjectNames(projectUpdate) {
+        const saveResult = await onSaveProjectNames(projectUpdate);
+
+        if (!saveResult) {
+            return null;
+        }
+
+        setFormValues(function updateSelectedProject(currentValues) {
+            if (currentValues.projectName === MIXED_SELECT_VALUE) {
+                return currentValues;
+            }
+
+            return {
+                ...currentValues,
+                projectName: getUpdatedSelectedProject(currentValues.projectName, projectUpdate),
             };
         });
 
@@ -381,6 +438,41 @@ export default function TaskForm(props) {
                         </Select>
                     </FormControl>
                 )}
+                <Box className="assignee-field-row">
+                    <FormControl fullWidth className="assignee-select-control">
+                        <InputLabel id="project-name-label">Project</InputLabel>
+                        <Select
+                            labelId="project-name-label"
+                            label="Project"
+                            name="projectName"
+                            value={formValues.projectName}
+                            onChange={handleFieldChange}
+                        >
+                            {formValues.projectName === MIXED_SELECT_VALUE && (
+                                <MenuItem value={MIXED_SELECT_VALUE} disabled>
+                                    Mixed values
+                                </MenuItem>
+                            )}
+                            {projectOptions.map(function renderProject(option) {
+                                return (
+                                    <MenuItem key={option} value={option}>
+                                        {option}
+                                    </MenuItem>
+                                );
+                            })}
+                        </Select>
+                    </FormControl>
+                    <Tooltip title="Manage project">
+                        <IconButton
+                            className="assignee-manager-button"
+                            aria-label="Manage project"
+                            disabled={isSaving || isProjectSaving}
+                            onClick={handleOpenProjectManager}
+                        >
+                            <AccountTreeOutlinedIcon fontSize="small" />
+                        </IconButton>
+                    </Tooltip>
+                </Box>
                 {!shouldShowDateRangeFields ? (
                     <TextField
                         label="Release date"
@@ -517,6 +609,13 @@ export default function TaskForm(props) {
                 onClose={handleCloseAssigneeManager}
                 onSave={handleSaveAssignees}
             />
+            <ProjectManagerDialog
+                open={isProjectManagerOpen}
+                projectNames={projectNames}
+                isSaving={isProjectSaving}
+                onClose={handleCloseProjectManager}
+                onSave={handleSaveProjectNames}
+            />
         </>
     );
 }
@@ -639,6 +738,7 @@ function getInitialFormValues(task) {
         description: task.description || "",
         url: task.url || "",
         assignee: task.assignee || UNASSIGNED_ASSIGNEE,
+        projectName: task.projectName || NO_PROJECT_NAME,
         taskType,
         taskLevel: isReleaseTask
             ? DEFAULT_TASK_LEVEL
@@ -677,6 +777,7 @@ function normalizeTaskDraft(formValues) {
         description: formValues.description.trim(),
         url: formValues.url.trim(),
         assignee: formValues.assignee,
+        projectName: formValues.projectName,
         taskType: formValues.taskType,
         taskLevel: formValues.taskType === RELEASE_TASK_TYPE
             ? DEFAULT_TASK_LEVEL
@@ -789,6 +890,10 @@ function getNormalizedTaskFieldValue(task, fieldName) {
         return task.assignee || UNASSIGNED_ASSIGNEE;
     }
 
+    if (fieldName === "projectName") {
+        return task.projectName || NO_PROJECT_NAME;
+    }
+
     if (fieldName === "taskType") {
         return getSupportedTaskType(task.taskType);
     }
@@ -814,7 +919,12 @@ function getNormalizedTaskFieldValue(task, fieldName) {
 
 
 function getMixedFieldValue(fieldName) {
-    if (fieldName === "assignee" || fieldName === "taskType" || fieldName === "taskLevel") {
+    if (
+        fieldName === "assignee"
+        || fieldName === "projectName"
+        || fieldName === "taskType"
+        || fieldName === "taskLevel"
+    ) {
         return MIXED_SELECT_VALUE;
     }
 
@@ -838,6 +948,18 @@ function getAssigneeOptions(assignees) {
     return [
         UNASSIGNED_ASSIGNEE,
         ...assigneeNames,
+    ];
+}
+
+
+function getProjectOptions(projectNames) {
+    const projectNameOptions = projectNames.map(function mapProjectName(projectName) {
+        return projectName.name;
+    });
+
+    return [
+        NO_PROJECT_NAME,
+        ...projectNameOptions,
     ];
 }
 
@@ -876,6 +998,25 @@ function getUpdatedSelectedAssignee(selectedAssignee, assigneeUpdate) {
     }
 
     return selectedAssignee;
+}
+
+
+function getUpdatedSelectedProject(selectedProject, projectUpdate) {
+    const renamedProject = projectUpdate.renamedProjects.find(function matchRenamedProject(
+        project,
+    ) {
+        return project.previousName === selectedProject;
+    });
+
+    if (renamedProject) {
+        return renamedProject.nextName;
+    }
+
+    if (projectUpdate.deletedProjects.includes(selectedProject)) {
+        return NO_PROJECT_NAME;
+    }
+
+    return selectedProject;
 }
 
 

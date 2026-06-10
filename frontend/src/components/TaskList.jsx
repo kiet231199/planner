@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import FilterAltIcon from "@mui/icons-material/FilterAlt";
@@ -40,6 +40,9 @@ const ASSIGNEE_AVATAR_COLORS = [
     "#5e35b1",
     "#d81b60",
 ];
+const LEFT_MOUSE_BUTTON = 0;
+const TASK_LIST_DRAG_THRESHOLD_PIXELS = 4;
+const TASK_LIST_DRAG_TYPE_ROW_SELECT = "task-list-row-select";
 
 
 export default function TaskList(props) {
@@ -59,16 +62,22 @@ export default function TaskList(props) {
         headerHeight,
         onColumnVisibilityToggle,
         onClearHighlight,
-        onClearSelection,
         onFilterToggle,
         onFiltersClear,
         onHighlightTask,
+        onOpenTaskEdit,
         onPanelScroll,
         onAutoResize,
         onResizeStart,
         onSelectTask,
+        onSelectTasks,
         onSortToggle,
     } = props;
+    const dragStateRef = useRef(null);
+    const suppressNextRowClickRef = useRef(false);
+    const tasksRef = useRef(tasks);
+    const onClearHighlightRef = useRef(onClearHighlight);
+    const onSelectTasksRef = useRef(onSelectTasks);
     const [filterMenuState, setFilterMenuState] = useState({
         anchorElement: null,
         columnId: null,
@@ -102,6 +111,12 @@ export default function TaskList(props) {
         ROW_HEIGHT_PIXELS,
     );
     const fillerRowHeight = Math.max(0, bodyRowCount - tasks.length) * ROW_HEIGHT_PIXELS;
+
+    useEffect(function keepTaskListSelectionRefsCurrent() {
+        tasksRef.current = tasks;
+        onClearHighlightRef.current = onClearHighlight;
+        onSelectTasksRef.current = onSelectTasks;
+    }, [onClearHighlight, onSelectTasks, tasks]);
 
     useEffect(function measureTaskListPanelHeight() {
         const panel = panelRef.current;
@@ -155,13 +170,49 @@ export default function TaskList(props) {
         };
     }, [isColumnMenuOpen]);
 
+    useEffect(function bindTaskListDragListeners() {
+        function handleMouseMove(event) {
+            const dragState = dragStateRef.current;
+
+            if (!dragState) {
+                return;
+            }
+
+            if (!isTaskListRowSelectionDrag(dragState)) {
+                return;
+            }
+
+            updateTaskListRowSelectionPreview(dragState, event);
+        }
+
+        function handleMouseUp(event) {
+            const dragState = dragStateRef.current;
+
+            if (!dragState) {
+                return;
+            }
+
+            if (isTaskListRowSelectionDrag(dragState)) {
+                finishTaskListRowSelection(dragState, event);
+            }
+        }
+
+        window.addEventListener("mousemove", handleMouseMove);
+        window.addEventListener("mouseup", handleMouseUp);
+
+        return function removeTaskListDragListeners() {
+            window.removeEventListener("mousemove", handleMouseMove);
+            window.removeEventListener("mouseup", handleMouseUp);
+        };
+    }, [headerHeight, panelRef]);
+
     function handleTaskListMouseDown(event) {
         if (event.target instanceof Element && event.target.closest(".task-list-row")) {
             return;
         }
 
         onClearHighlight();
-        onClearSelection();
+        onSelectTasks([], getDefaultSelectionMode(), tasks);
     }
 
     function handleTaskListHeaderMouseDown(event) {
@@ -263,7 +314,28 @@ export default function TaskList(props) {
         handleFilterMenuClose();
     }
 
+    function handleTaskRowMouseDown(event, task) {
+        if (event.button !== LEFT_MOUSE_BUTTON) {
+            return;
+        }
+
+        dragStateRef.current = {
+            type: TASK_LIST_DRAG_TYPE_ROW_SELECT,
+            panel: panelRef.current,
+            startClientX: event.clientX,
+            startClientY: event.clientY,
+            startTaskId: task.id,
+            currentTaskId: task.id,
+            hasMoved: false,
+        };
+    }
+
     function handleTaskSelection(event, task) {
+        if (suppressNextRowClickRef.current) {
+            suppressNextRowClickRef.current = false;
+            return;
+        }
+
         const selectionMode = getTaskSelectionMode(event);
 
         if (selectionMode.isMultiSelect || selectionMode.isRangeSelect) {
@@ -273,6 +345,60 @@ export default function TaskList(props) {
         }
 
         onSelectTask(task.id, selectionMode, tasks);
+    }
+
+    function handleTaskRowDoubleClick(event, task) {
+        event.stopPropagation();
+        onOpenTaskEdit(task.id);
+    }
+
+    function updateTaskListRowSelectionPreview(dragState, event) {
+        const movement = getPointerMovement(dragState, event);
+
+        if (!dragState.hasMoved && movement < TASK_LIST_DRAG_THRESHOLD_PIXELS) {
+            return;
+        }
+
+        const currentTaskId = getTaskListTaskIdAtPointer(
+            dragState.panel,
+            event,
+            tasksRef.current,
+            headerHeight,
+        );
+
+        if (!currentTaskId) {
+            return;
+        }
+
+        if (dragState.hasMoved && currentTaskId === dragState.currentTaskId) {
+            return;
+        }
+
+        const selectedTaskIds = getTaskListRangeTaskIds(
+            tasksRef.current,
+            dragState.startTaskId,
+            currentTaskId,
+        );
+
+        dragState.hasMoved = true;
+        dragState.currentTaskId = currentTaskId;
+        onClearHighlightRef.current();
+        onSelectTasksRef.current(selectedTaskIds, getDefaultSelectionMode(), tasksRef.current);
+    }
+
+    function finishTaskListRowSelection(dragState, event) {
+        const movement = getPointerMovement(dragState, event);
+        const hasSelectedByDrag = dragState.hasMoved
+            || movement >= TASK_LIST_DRAG_THRESHOLD_PIXELS;
+
+        dragStateRef.current = null;
+
+        if (!hasSelectedByDrag) {
+            return;
+        }
+
+        updateTaskListRowSelectionPreview(dragState, event);
+        suppressNextRowClickRef.current = true;
     }
 
     if (isCollapsed) {
@@ -368,8 +494,14 @@ export default function TaskList(props) {
                                 selected={isSelected}
                                 className={rowClassName}
                                 sx={taskListGridStyle}
+                                onMouseDown={function startTaskRowSelection(event) {
+                                    handleTaskRowMouseDown(event, task);
+                                }}
                                 onClick={function selectTask(event) {
                                     handleTaskSelection(event, task);
+                                }}
+                                onDoubleClick={function openTaskEdit(event) {
+                                    handleTaskRowDoubleClick(event, task);
                                 }}
                             >
                                 {columns.map(function renderTaskColumn(column) {
@@ -611,6 +743,83 @@ function getTaskSelectionMode(event) {
         isMultiSelect: event.ctrlKey || event.metaKey,
         isRangeSelect: event.shiftKey,
     };
+}
+
+
+function getDefaultSelectionMode() {
+    return {
+        isMultiSelect: false,
+        isRangeSelect: false,
+    };
+}
+
+
+function isTaskListRowSelectionDrag(dragState) {
+    return dragState.type === TASK_LIST_DRAG_TYPE_ROW_SELECT;
+}
+
+
+function getPointerMovement(dragState, event) {
+    return Math.max(
+        Math.abs(event.clientX - dragState.startClientX),
+        Math.abs(event.clientY - dragState.startClientY),
+    );
+}
+
+
+function getTaskListTaskIdAtPointer(panel, event, tasks, headerHeight) {
+    const pointedElement = document.elementFromPoint(event.clientX, event.clientY);
+    const pointedRow = pointedElement instanceof Element
+        ? pointedElement.closest(".task-list-row")
+        : null;
+
+    if (pointedRow) {
+        return pointedRow.dataset.taskId || null;
+    }
+
+    if (!panel || tasks.length === 0 || !isPointerInsidePanel(panel, event)) {
+        return null;
+    }
+
+    const panelRect = panel.getBoundingClientRect();
+    const rowOffset = panel.scrollTop + event.clientY - panelRect.top - headerHeight;
+    const rowIndex = Math.floor(rowOffset / ROW_HEIGHT_PIXELS);
+    const clampedRowIndex = Math.min(Math.max(rowIndex, 0), tasks.length - 1);
+
+    return tasks[clampedRowIndex].id;
+}
+
+
+function isPointerInsidePanel(panel, event) {
+    const panelRect = panel.getBoundingClientRect();
+
+    return (
+        event.clientX >= panelRect.left
+        && event.clientX <= panelRect.right
+        && event.clientY >= panelRect.top
+        && event.clientY <= panelRect.bottom
+    );
+}
+
+
+function getTaskListRangeTaskIds(tasks, firstTaskId, secondTaskId) {
+    const firstTaskIndex = tasks.findIndex(function matchFirstTask(task) {
+        return task.id === firstTaskId;
+    });
+    const secondTaskIndex = tasks.findIndex(function matchSecondTask(task) {
+        return task.id === secondTaskId;
+    });
+
+    if (firstTaskIndex < 0 || secondTaskIndex < 0) {
+        return [secondTaskId];
+    }
+
+    const startIndex = Math.min(firstTaskIndex, secondTaskIndex);
+    const stopIndex = Math.max(firstTaskIndex, secondTaskIndex);
+
+    return tasks.slice(startIndex, stopIndex + 1).map(function mapRangeTaskId(task) {
+        return task.id;
+    });
 }
 
 

@@ -231,6 +231,30 @@ export default function PlannerShell(props) {
         wasCompactLayoutRef.current = isCompactLayout;
     }, [isCompactLayout]);
 
+    useEffect(function clearSelectionOutsidePlannerPanels() {
+        if (isDrawerOpen || isDayOffDrawerOpen) {
+            return undefined;
+        }
+
+        function handleDocumentClick(event) {
+            if (!(event.target instanceof Element)) {
+                return;
+            }
+
+            if (shouldKeepSelectionForDocumentClick(event.target)) {
+                return;
+            }
+
+            onClearSelection();
+        }
+
+        document.addEventListener("click", handleDocumentClick);
+
+        return function removeDocumentClickListener() {
+            document.removeEventListener("click", handleDocumentClick);
+        };
+    }, [isDayOffDrawerOpen, isDrawerOpen, onClearSelection]);
+
     useLayoutEffect(function alignModeZoomAnchor() {
         const panel = timelinePanelRef.current;
         const anchor = timelineModeZoomAnchorRef.current;
@@ -651,14 +675,15 @@ export default function PlannerShell(props) {
                     headerHeight={timelineHeaderHeight}
                     onColumnVisibilityToggle={handleTaskListColumnVisibilityToggle}
                     onClearHighlight={handleClearTaskHighlight}
-                    onClearSelection={onClearSelection}
                     onFilterToggle={handleTaskListFilterToggle}
                     onFiltersClear={handleTaskListFiltersClear}
                     onHighlightTask={handleTaskHighlight}
+                    onOpenTaskEdit={onOpenTaskEdit}
                     onPanelScroll={handleTaskListScroll}
                     onAutoResize={handleTaskListAutoResize}
                     onResizeStart={handleTaskListResizeStart}
                     onSelectTask={onSelectTask}
+                    onSelectTasks={onSelectTasks}
                     onSortToggle={handleTaskListSortToggle}
                 />
                 <TimelineChart
@@ -675,6 +700,7 @@ export default function PlannerShell(props) {
                     showTimelineHorizontalGridLines={showTimelineHorizontalGridLines}
                     zoomIndex={zoomIndex}
                     onClearHighlight={handleClearTaskHighlight}
+                    onClearSelection={onClearSelection}
                     onHighlightTask={handleTaskHighlight}
                     onMoveTasks={onMoveTasks}
                     onOpenTaskEdit={onOpenTaskEdit}
@@ -766,6 +792,18 @@ function getPlannerShellClassName(isCompactLayout, isShortViewport) {
     }
 
     return classNames.join(" ");
+}
+
+
+function shouldKeepSelectionForDocumentClick(target) {
+    return Boolean(
+        target.closest(".timeline-panel")
+        || target.closest(".task-list-panel")
+        || target.closest(".task-toolbar")
+        || target.closest(".toolbar-panel")
+        || target.closest(".MuiModal-root")
+        || target.closest(".MuiPopover-root")
+    );
 }
 
 

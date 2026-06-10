@@ -33,6 +33,7 @@ const STOP_RESIZE_EDGE = "stop";
 const TASK_DRAG_THRESHOLD_PIXELS = 4;
 const TASK_DRAG_TYPE_MOVE = "task-move";
 const TASK_DRAG_TYPE_RESIZE = "task-resize";
+const TIMELINE_DRAG_TYPE_DATE_SELECT = "date-select";
 const TIMELINE_DRAG_TYPE_PAN = "timeline-pan";
 const TIMELINE_DRAG_TYPE_RECTANGLE_SELECT = "rectangle-select";
 const RECTANGLE_SELECTION_THRESHOLD_PIXELS = 4;
@@ -42,7 +43,6 @@ const TASK_HOVER_BUBBLE_OFFSET_Y_PIXELS = 14;
 const DAY_HEADER_MODE = "day";
 const WEEK_HEADER_MODE = "week";
 const SECOND_HEADER_ROW_INDEX = 1;
-const DAY_SELECTION_COLLAPSE_DELAY_MILLISECONDS = 400;
 const SUNDAY_DAY_INDEX = 0;
 const SATURDAY_DAY_INDEX = 6;
 const ZOOM_IN_DIRECTION = 10;
@@ -65,6 +65,10 @@ const EVENT_MARKER_COLUMN_WEEKEND = "weekend";
 const EVENT_MARKER_COLUMN_TODAY = "today";
 const EVENT_FLAG_LIGHT_TEXT_COLOR = "#ffffff";
 const EVENT_FLAG_DARK_TEXT_COLOR = "#1f2937";
+const EVENT_FLAG_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+    day: "2-digit",
+    month: "short",
+});
 const COMPLETED_PROGRESS_PERCENT = 100;
 const PERCENT_DIVISOR = 100;
 const HEX_COLOR_LENGTH = 7;
@@ -113,6 +117,7 @@ export default function TimelineChart(props) {
         showTimelineHorizontalGridLines = true,
         zoomIndex,
         onClearHighlight,
+        onClearSelection,
         onHighlightTask,
         onMoveTasks,
         onOpenDayOffEdit,
@@ -131,15 +136,16 @@ export default function TimelineChart(props) {
     const metricsRef = useRef(null);
     const tasksRef = useRef(tasks);
     const onClearHighlightRef = useRef(onClearHighlight);
+    const onClearSelectionRef = useRef(onClearSelection);
     const onMoveTasksRef = useRef(onMoveTasks);
     const onResizeTaskDatesRef = useRef(onResizeTaskDates);
+    const onSelectDayOffDateRef = useRef(onSelectDayOffDate);
     const onSelectTaskRef = useRef(onSelectTask);
     const onSelectTasksRef = useRef(onSelectTasks);
     const onTimelineZoomRef = useRef(onTimelineZoom);
     const pendingTaskDragPointerRef = useRef(null);
     const pendingZoomAnchorRef = useRef(null);
     const pendingResizeAnchorRef = useRef(null);
-    const pendingDaySelectionTimeoutRef = useRef(null);
     const panelSizeFrameIdRef = useRef(null);
     const visibleTimelineRangeFrameIdRef = useRef(null);
     const pendingTimelinePanPointerRef = useRef(null);
@@ -213,9 +219,6 @@ export default function TimelineChart(props) {
     const taskRowHighlights = useMemo(function memoizeTaskRowHighlights() {
         return getTaskRowHighlights(tasks, selectedTaskIds, highlightedTaskId);
     }, [highlightedTaskId, selectedTaskIds, tasks]);
-    const selectedDayOffDateSet = useMemo(function memoizeSelectedDayOffDateSet() {
-        return new Set(selectedDayOffDates);
-    }, [selectedDayOffDates]);
     const selectedDayHighlights = useMemo(function memoizeSelectedDayHighlights() {
         return getSelectedDayHighlights(selectedDayOffDates, metrics);
     }, [metrics, selectedDayOffDates]);
@@ -251,18 +254,19 @@ export default function TimelineChart(props) {
 
     useEffect(function keepTimelineClearHandlersCurrent() {
         onClearHighlightRef.current = onClearHighlight;
-    }, [onClearHighlight]);
+        onClearSelectionRef.current = onClearSelection;
+    }, [onClearHighlight, onClearSelection]);
 
     useEffect(function keepTaskDragHandlersCurrent() {
         onMoveTasksRef.current = onMoveTasks;
         onResizeTaskDatesRef.current = onResizeTaskDates;
+        onSelectDayOffDateRef.current = onSelectDayOffDate;
         onSelectTaskRef.current = onSelectTask;
         onSelectTasksRef.current = onSelectTasks;
-    }, [onMoveTasks, onResizeTaskDates, onSelectTask, onSelectTasks]);
+    }, [onMoveTasks, onResizeTaskDates, onSelectDayOffDate, onSelectTask, onSelectTasks]);
 
-    useEffect(function clearPendingDaySelectionOnUnmount() {
+    useEffect(function clearPendingTimelineWorkOnUnmount() {
         return function clearPendingTimelineWork() {
-            clearPendingDaySelection();
             cancelPanelSizeFrame();
             cancelTaskDragPreviewFrame();
             cancelTaskHoverFrame();
@@ -618,6 +622,52 @@ export default function TimelineChart(props) {
         setSelectionRectangle(getSelectionRectangle(dragState.startPoint, dragState.currentPoint));
     }
 
+    function updateDateSelectionPreview(dragState, event) {
+        const movement = getPointerMovement(dragState, event);
+
+        if (!dragState.hasMoved && movement < RECTANGLE_SELECTION_THRESHOLD_PIXELS) {
+            return;
+        }
+
+        const currentDate = getTimelineDateStringAtPointer(
+            dragState.panel,
+            event,
+            dragState.gridCells,
+        );
+
+        if (currentDate === dragState.currentDate && dragState.hasMoved) {
+            return;
+        }
+
+        dragState.hasMoved = true;
+        dragState.currentDate = currentDate;
+        onSelectDayOffDateRef.current(currentDate, getRangeSelectionMode());
+    }
+
+    function finishDateSelection(dragState, event) {
+        const movement = getPointerMovement(dragState, event);
+        const hasSelectedByDrag = dragState.hasMoved
+            || movement >= RECTANGLE_SELECTION_THRESHOLD_PIXELS;
+
+        dragStateRef.current = null;
+
+        if (!hasSelectedByDrag) {
+            return;
+        }
+
+        const currentDate = getTimelineDateStringAtPointer(
+            dragState.panel,
+            event,
+            dragState.gridCells,
+        );
+
+        if (currentDate === dragState.currentDate) {
+            return;
+        }
+
+        onSelectDayOffDateRef.current(currentDate, getRangeSelectionMode());
+    }
+
     function finishRectangleSelection(dragState, event) {
         const movement = getPointerMovement(dragState, event);
         const hasSelectedByDrag = dragState.hasMoved
@@ -686,7 +736,7 @@ export default function TimelineChart(props) {
 
     function clearTimelineTaskSelection() {
         onClearHighlightRef.current();
-        onSelectTasksRef.current([], getDefaultSelectionMode(), tasksRef.current);
+        onClearSelectionRef.current();
     }
 
     useEffect(function bindDragListeners() {
@@ -704,6 +754,11 @@ export default function TimelineChart(props) {
 
             if (isRectangleSelectionDrag(dragState)) {
                 updateRectangleSelectionPreview(dragState, event);
+                return;
+            }
+
+            if (isDateSelectionDrag(dragState)) {
+                updateDateSelectionPreview(dragState, event);
                 return;
             }
 
@@ -726,6 +781,11 @@ export default function TimelineChart(props) {
 
             if (isRectangleSelectionDrag(dragState)) {
                 finishRectangleSelection(dragState, event);
+                return;
+            }
+
+            if (isDateSelectionDrag(dragState)) {
+                finishDateSelection(dragState, event);
                 return;
             }
 
@@ -831,6 +891,48 @@ export default function TimelineChart(props) {
 
     function handleTimelineContextMenu(event) {
         event.preventDefault();
+    }
+
+    function handleTimelineHeaderMouseDown(event) {
+        if (event.button !== LEFT_MOUSE_BUTTON) {
+            return;
+        }
+
+        const panel = timelinePanelRef.current;
+
+        if (!panel) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (event.detail > 1) {
+            return;
+        }
+
+        const startDate = getTimelineDateStringAtPointer(
+            panel,
+            event,
+            metricsRef.current.gridCells,
+        );
+
+        if (event.ctrlKey || event.metaKey || event.shiftKey) {
+            onSelectDayOffDate(startDate, getDaySelectionMode(event));
+            return;
+        }
+
+        onSelectDayOffDate(startDate, getDefaultSelectionMode());
+
+        dragStateRef.current = {
+            type: TIMELINE_DRAG_TYPE_DATE_SELECT,
+            panel,
+            gridCells: metricsRef.current.gridCells,
+            startClientX: event.clientX,
+            startClientY: event.clientY,
+            currentDate: startDate,
+            hasMoved: false,
+        };
     }
 
     function handleTaskBarMouseDown(event, task) {
@@ -974,18 +1076,6 @@ export default function TimelineChart(props) {
         taskHoverFrameIdRef.current = null;
     }
 
-    function handleHeaderDayMouseDown(event, segment) {
-        event.preventDefault();
-        event.stopPropagation();
-
-        if (event.detail > 1) {
-            clearPendingDaySelection();
-            return;
-        }
-
-        selectHeaderDayFromMouseEvent(event, segment);
-    }
-
     function handleHeaderDayKeyDown(event, segment) {
         if (event.key !== "Enter" && event.key !== " ") {
             return;
@@ -999,60 +1089,19 @@ export default function TimelineChart(props) {
     function handleHeaderDayDoubleClick(event, segment) {
         event.preventDefault();
         event.stopPropagation();
-        clearPendingDaySelection();
         onOpenDayOffEdit(formatDateString(segment.startDate));
     }
 
-    function selectHeaderDayFromMouseEvent(event, segment) {
-        const date = formatDateString(segment.startDate);
-        const selectionMode = getDaySelectionMode(event);
-
-        if (shouldDelaySelectedRangeCollapse(date, selectionMode)) {
-            scheduleHeaderDaySelection(date, selectionMode);
-            return;
-        }
-
-        clearPendingDaySelection();
-        onSelectDayOffDate(date, selectionMode);
-    }
-
     function selectHeaderDay(event, segment) {
-        clearPendingDaySelection();
         onSelectDayOffDate(formatDateString(segment.startDate), getDaySelectionMode(event));
-    }
-
-    function scheduleHeaderDaySelection(date, selectionMode) {
-        clearPendingDaySelection();
-
-        pendingDaySelectionTimeoutRef.current = window.setTimeout(
-            function selectPendingHeaderDay() {
-                pendingDaySelectionTimeoutRef.current = null;
-                onSelectDayOffDate(date, selectionMode);
-            },
-            DAY_SELECTION_COLLAPSE_DELAY_MILLISECONDS,
-        );
-    }
-
-    function clearPendingDaySelection() {
-        if (!pendingDaySelectionTimeoutRef.current) {
-            return;
-        }
-
-        window.clearTimeout(pendingDaySelectionTimeoutRef.current);
-        pendingDaySelectionTimeoutRef.current = null;
-    }
-
-    function shouldDelaySelectedRangeCollapse(date, selectionMode) {
-        return (
-            selectedDayOffDates.length > 1
-            && selectedDayOffDates.includes(date)
-            && !selectionMode.isMultiSelect
-            && !selectionMode.isRangeSelect
-        );
     }
 
     function handleTaskResizeMouseDown(event, task, resizeEdge) {
         if (event.button !== LEFT_MOUSE_BUTTON) {
+            return;
+        }
+
+        if (isReleaseTask(task)) {
             return;
         }
 
@@ -1298,7 +1347,11 @@ export default function TimelineChart(props) {
                     minHeight: `max(100%, ${chartHeight}px)`,
                 }}
             >
-                <Box className="timeline-header" sx={{ height: `${metrics.headerHeight}px` }}>
+                <Box
+                    className="timeline-header"
+                    sx={{ height: `${metrics.headerHeight}px` }}
+                    onMouseDown={handleTimelineHeaderMouseDown}
+                >
                     {timelineHeaderRows.map(function renderHeaderRow(headerRow, rowIndex) {
                         return (
                             <Box
@@ -1312,21 +1365,32 @@ export default function TimelineChart(props) {
                                         rowIndex,
                                         segment,
                                     );
+                                    const isSelectionCell = isTimelineHeaderSelectionCell(
+                                        metrics,
+                                        rowIndex,
+                                        segment,
+                                    );
                                     const isSelectedDayCell = (
-                                        isSelectableDayCell
-                                        && selectedDayOffDateSet.has(formatDateString(
-                                            segment.startDate,
-                                        ))
+                                        isSelectionCell
+                                        && isTimelineHeaderSegmentSelected(
+                                            segment,
+                                            selectedDayOffDates,
+                                        )
+                                    );
+                                    const isTodayHeaderCell = (
+                                        isSelectionCell
+                                        && isTimelineHeaderTodayCell(metrics, segment)
                                     );
 
                                     return (
                                         <Box
                                             key={segment.key}
-                                            role={isSelectableDayCell ? "button" : undefined}
-                                            tabIndex={isSelectableDayCell ? 0 : undefined}
+                                            role={isSelectionCell ? "button" : undefined}
+                                            tabIndex={isSelectionCell ? 0 : undefined}
                                             className={getTimelineHeaderCellClassName(
-                                                isSelectableDayCell,
+                                                isSelectionCell,
                                                 isSelectedDayCell,
+                                                isTodayHeaderCell,
                                             )}
                                             sx={{
                                                 left: `${segment.left}px`,
@@ -1335,11 +1399,6 @@ export default function TimelineChart(props) {
                                             onKeyDown={isSelectableDayCell
                                                 ? function selectHeaderDayByKeyboard(event) {
                                                     handleHeaderDayKeyDown(event, segment);
-                                                }
-                                                : undefined}
-                                            onMouseDown={isSelectableDayCell
-                                                ? function selectHeaderDayByMouse(event) {
-                                                    handleHeaderDayMouseDown(event, segment);
                                                 }
                                                 : undefined}
                                             onDoubleClick={isSelectableDayCell
@@ -1508,7 +1567,8 @@ export default function TimelineChart(props) {
                             isTaskDragPreviewTarget,
                         );
                         const canResizeTask = (
-                            selectedTaskIds.length <= 1
+                            !isReleaseTask(bar.task)
+                            && selectedTaskIds.length <= 1
                             && taskBarVisualLayout.width >= MIN_TASK_BAR_RESIZE_WIDTH_PIXELS
                         );
                         const shouldShowTaskLabel = shouldShowTaskBarLabel(
@@ -1713,7 +1773,7 @@ export default function TimelineChart(props) {
                                                     component="span"
                                                     className="timeline-event-flag-text"
                                                 >
-                                                    {eventItem.name}
+                                                    {getEventFlagText(eventItem)}
                                                 </Box>
                                             </Box>
                                         );
@@ -1764,7 +1824,43 @@ function isTimelineHeaderDayCell(metrics, rowIndex, segment) {
 }
 
 
-function getTimelineHeaderCellClassName(isSelectableDayCell, isSelectedDayCell) {
+function isTimelineHeaderSelectionCell(metrics, rowIndex, segment) {
+    return (
+        rowIndex === metrics.headerRows.length - 1
+        && Boolean(segment.startDate)
+        && Boolean(segment.stopDate)
+    );
+}
+
+
+function isTimelineHeaderSegmentSelected(segment, selectedDates) {
+    if (!segment.startDate || !segment.stopDate || selectedDates.length === 0) {
+        return false;
+    }
+
+    const startDate = formatDateString(segment.startDate);
+    const stopDate = formatDateString(segment.stopDate);
+
+    return selectedDates.some(function matchSelectedHeaderDate(selectedDate) {
+        return selectedDate >= startDate && selectedDate <= stopDate;
+    });
+}
+
+
+function isTimelineHeaderTodayCell(metrics, segment) {
+    return (
+        metrics.headerMode === DAY_HEADER_MODE
+        && segment.dayCount === 1
+        && formatDateString(segment.startDate) === formatDateString(metrics.todayDate)
+    );
+}
+
+
+function getTimelineHeaderCellClassName(
+    isSelectableDayCell,
+    isSelectedDayCell,
+    isTodayHeaderCell,
+) {
     const classNames = ["timeline-header-cell"];
 
     if (isSelectableDayCell) {
@@ -1773,6 +1869,10 @@ function getTimelineHeaderCellClassName(isSelectableDayCell, isSelectedDayCell) 
 
     if (isSelectedDayCell) {
         classNames.push("timeline-header-day-cell-selected");
+    }
+
+    if (isTodayHeaderCell) {
+        classNames.push("timeline-header-day-cell-today");
     }
 
     return classNames.join(" ");
@@ -1814,6 +1914,14 @@ function getDefaultSelectionMode() {
     return {
         isMultiSelect: false,
         isRangeSelect: false,
+    };
+}
+
+
+function getRangeSelectionMode() {
+    return {
+        isMultiSelect: false,
+        isRangeSelect: true,
     };
 }
 
@@ -1921,11 +2029,33 @@ function getReleaseEventGroups(tasks, metrics, projectColorMap) {
         eventGroup.events.push({
             id: task.id,
             name: task.name,
+            dateLabel: shouldShowReleaseEventFlagDate(metrics)
+                ? formatEventFlagDate(eventDate)
+                : null,
             backgroundColor: getReleaseEventFlagBackgroundColor(task, projectColorMap),
         });
     });
 
     return eventGroups;
+}
+
+
+function formatEventFlagDate(date) {
+    return EVENT_FLAG_DATE_FORMATTER.format(date);
+}
+
+
+function shouldShowReleaseEventFlagDate(metrics) {
+    return metrics.headerMode !== DAY_HEADER_MODE;
+}
+
+
+function getEventFlagText(eventItem) {
+    if (!eventItem.dateLabel) {
+        return eventItem.name;
+    }
+
+    return `${eventItem.dateLabel}: ${eventItem.name}`;
 }
 
 
@@ -2548,6 +2678,11 @@ function isRectangleSelectionDrag(dragState) {
 }
 
 
+function isDateSelectionDrag(dragState) {
+    return dragState.type === TIMELINE_DRAG_TYPE_DATE_SELECT;
+}
+
+
 function getTaskInteractionIds(tasks, selectedTaskIds, taskId) {
     if (!selectedTaskIds.includes(taskId)) {
         return [taskId];
@@ -2600,6 +2735,11 @@ function getTimelineDateAtPointer(panel, event, gridCells) {
     const timelineOffset = panel.scrollLeft + viewportOffset;
 
     return getTimelineDateAtOffset(timelineOffset, gridCells).date;
+}
+
+
+function getTimelineDateStringAtPointer(panel, event, gridCells) {
+    return formatDateString(getTimelineDateAtPointer(panel, event, gridCells));
 }
 
 
@@ -2942,6 +3082,11 @@ function getHorizontalWheelDelta(event) {
 
 function getTaskColor(task) {
     return getColorFromTaskType(task.taskType);
+}
+
+
+function isReleaseTask(task) {
+    return task.taskType === RELEASE_TASK_TYPE;
 }
 
 

@@ -7,7 +7,9 @@ export const ASSIGNEE_OPTIONS = [UNASSIGNED_ASSIGNEE, "Alice", "Bob", "Charlie"]
 
 export const DEFAULT_TASK_TYPE = "Plan";
 export const RELEASE_TASK_TYPE = "Release";
+export const MULTI_PHASE_TASK_TYPE = "Multi-phase";
 export const TASK_TYPE_OPTIONS = [
+    MULTI_PHASE_TASK_TYPE,
     "Plan",
     "Design",
     "Bug",
@@ -24,6 +26,7 @@ export const TASK_TYPE_COLORS = {
     Dev: "#3eb489",
     Test: "#64b5f6",
     Doc: "#8e24aa",
+    "Multi-phase": "#6d28d9",
     Release: "#52595d",
 };
 

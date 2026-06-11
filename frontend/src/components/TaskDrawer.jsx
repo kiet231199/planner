@@ -15,6 +15,7 @@ export default function TaskDrawer(props) {
         mode,
         task,
         tasks = [],
+        subTaskEditRequest,
         onClose,
         onCreateTask,
         onSaveAssignees,
@@ -51,6 +52,7 @@ export default function TaskDrawer(props) {
                 key={getTaskFormKey(isEditMode, selectedTasks)}
                 initialTask={isEditMode ? task : null}
                 initialTasks={isEditMode ? selectedTasks : []}
+                subTaskEditRequest={isEditMode ? subTaskEditRequest : null}
                 isSaving={isSaving}
                 assignees={assignees}
                 projectNames={projectNames}

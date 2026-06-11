@@ -1,3 +1,10 @@
+import { MULTI_PHASE_TASK_TYPE } from "../constants/taskOptions";
+import {
+    getEffectiveSubTaskStopDate,
+    sortSubTasksByStartDate,
+} from "./subTasks";
+
+
 const DAY_IN_MILLISECONDS = 24 * 60 * 60 * 1000;
 const GENERATED_PAST_DAYS = 365;
 const GENERATED_FUTURE_DAYS = 730;
@@ -42,6 +49,8 @@ const EMPTY_TASK_RANGE_SIGNATURE = "empty";
 const TIMELINE_SCALE_CACHE_KEY_SEPARATOR = "|";
 
 const timelineScaleCache = new Map();
+
+export const MIN_SUB_TASK_DISPLAY_WIDTH_PIXELS = 1;
 
 export const ZOOM_LEVELS = buildZoomLevels();
 export const DEFAULT_ZOOM_INDEX = getDefaultZoomIndex();
@@ -109,6 +118,71 @@ export function getTimelineTaskBars(tasks, gridCells) {
     return tasks.map(function mapTaskToBar(task, index) {
         return createTaskBar(task, index, gridCells);
     });
+}
+
+
+export function getSubTaskBars(task, taskIndex, gridCells) {
+    if (!task.subTasks || task.subTasks.length === 0) {
+        return [];
+    }
+
+    return sortSubTasksByStartDate(task.subTasks).map(function mapSubTaskToBar(subTask) {
+        const startDate = parseDate(subTask.startDate);
+        const endDate = addDays(parseDate(getEffectiveSubTaskStopDate(subTask)), 1);
+        const left = getDateOffset(startDate, gridCells);
+        const right = getDateOffset(endDate, gridCells);
+        const width = Math.max(0, right - left);
+
+        return {
+            subTask,
+            parentTaskId: task.id,
+            taskIndex,
+            left,
+            top: taskIndex * ROW_HEIGHT_PIXELS,
+            width,
+        };
+    });
+}
+
+
+export function computeMultiPhaseTaskDates(subTasks) {
+    if (!subTasks || subTasks.length === 0) {
+        const today = formatDate(normalizeDate(new Date()));
+
+        return { startDate: today, stopDate: today, progressPercent: 0 };
+    }
+
+    const sortedSubTasks = sortSubTasksByStartDate(subTasks);
+    let startDate = sortedSubTasks[0].startDate;
+    let stopDate = getEffectiveSubTaskStopDate(sortedSubTasks[0]);
+    let totalDays = 0;
+    let weightedProgress = 0;
+
+    sortedSubTasks.forEach(function accumulateSubTask(subTask) {
+        if (subTask.startDate < startDate) {
+            startDate = subTask.startDate;
+        }
+
+        const effectiveStopDate = getEffectiveSubTaskStopDate(subTask);
+
+        if (effectiveStopDate > stopDate) {
+            stopDate = effectiveStopDate;
+        }
+
+        const days = getInclusiveDayCount(
+            parseDate(subTask.startDate),
+            parseDate(effectiveStopDate),
+        );
+
+        totalDays += days;
+        weightedProgress += subTask.progressPercent * days;
+    });
+
+    const progressPercent = totalDays > 0
+        ? Math.round(weightedProgress / totalDays)
+        : 0;
+
+    return { startDate, stopDate, progressPercent };
 }
 
 
@@ -455,12 +529,14 @@ function createTaskBar(task, index, gridCells) {
     const left = getDateOffset(taskStartDate, gridCells);
     const right = getDateOffset(taskEndDate, gridCells);
     const width = Math.max(right - left, MIN_BAR_WIDTH_PIXELS);
+    const isMultiPhaseWrapper = task.taskType === MULTI_PHASE_TASK_TYPE;
 
     return {
         task,
         left,
         top: index * ROW_HEIGHT_PIXELS,
         width,
+        isMultiPhaseWrapper,
     };
 }
 

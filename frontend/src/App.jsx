@@ -20,12 +20,20 @@ import {
     MAX_ZOOM_INDEX,
     MIN_ZOOM_INDEX,
     addDaysToDateString,
+    computeMultiPhaseTaskDates,
     getTimelineZoomIndexForMode,
     getTimelineZoomMode,
 } from "./utils/chartScale";
 import {
+    doesSubTaskOverlap,
+    getSubTaskDurationDayDelta,
+    hasSubTaskOverlap,
+    sortSubTasksByStartDate,
+} from "./utils/subTasks";
+import {
     DAY_OFF_ALL_ASSIGNEES,
     DEFAULT_TASK_LEVEL,
+    MULTI_PHASE_TASK_TYPE,
     RELEASE_TASK_TYPE,
 } from "./constants/taskOptions";
 
@@ -110,6 +118,11 @@ export default function App() {
     const [taskBufferMode, setTaskBufferMode] = useState(null);
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
     const [isDayOffDrawerOpen, setIsDayOffDrawerOpen] = useState(false);
+    const [selectedSubTask, setSelectedSubTask] = useState(null);
+    const [selectedSubTasks, setSelectedSubTasks] = useState([]);
+    const [copiedSubTask, setCopiedSubTask] = useState(null);
+    const [cutSubTaskInfo, setCutSubTaskInfo] = useState(null);
+    const [subTaskEditRequest, setSubTaskEditRequest] = useState(null);
     const [drawerMode, setDrawerMode] = useState("create");
     const [dayOffDrawerMode, setDayOffDrawerMode] = useState("create");
     const [isLoading, setIsLoading] = useState(true);
@@ -134,6 +147,11 @@ export default function App() {
     const taskBufferModeRef = useRef(null);
     const lastSelectedTaskIdRef = useRef(null);
     const lastSelectedDayOffDateRef = useRef(null);
+    const selectedSubTaskRef = useRef(null);
+    const selectedSubTasksRef = useRef([]);
+    const copiedSubTaskRef = useRef(null);
+    const cutSubTaskInfoRef = useRef(null);
+    const subTaskEditRequestIdRef = useRef(0);
     const undoStackRef = useRef([]);
     const redoStackRef = useRef([]);
     const isDirtyRef = useRef(false);
@@ -191,6 +209,22 @@ export default function App() {
         taskBufferModeRef.current = taskBufferMode;
     }, [taskBufferMode]);
 
+    useEffect(function keepLatestSelectedSubTaskReference() {
+        selectedSubTaskRef.current = selectedSubTask;
+    }, [selectedSubTask]);
+
+    useEffect(function keepLatestSelectedSubTasksReference() {
+        selectedSubTasksRef.current = selectedSubTasks;
+    }, [selectedSubTasks]);
+
+    useEffect(function keepLatestCopiedSubTaskReference() {
+        copiedSubTaskRef.current = copiedSubTask;
+    }, [copiedSubTask]);
+
+    useEffect(function keepLatestCutSubTaskInfoReference() {
+        cutSubTaskInfoRef.current = cutSubTaskInfo;
+    }, [cutSubTaskInfo]);
+
     useEffect(function pruneMissingCutTaskIds() {
         if (
             taskBufferModeRef.current !== TASK_BUFFER_MODE_CUT
@@ -223,6 +257,45 @@ export default function App() {
         setTaskBufferMode(null);
     }, [tasks]);
 
+    useEffect(function pruneMissingSubTaskState() {
+        if (selectedSubTasksRef.current.length > 0) {
+            const existingSelectedSubTasks = selectedSubTasksRef.current.filter(
+                function keepExistingSelectedSubTask(subTaskInfo) {
+                    return hasSubTaskInTasks(tasks, subTaskInfo);
+                },
+            );
+
+            if (existingSelectedSubTasks.length !== selectedSubTasksRef.current.length) {
+                const nextSelectedSubTask = getLastSelectedSubTask(existingSelectedSubTasks);
+
+                selectedSubTasksRef.current = existingSelectedSubTasks;
+                selectedSubTaskRef.current = nextSelectedSubTask;
+                setSelectedSubTasks(existingSelectedSubTasks);
+                setSelectedSubTask(nextSelectedSubTask);
+            }
+        }
+
+        if (
+            copiedSubTaskRef.current
+            && !hasSubTaskInTasks(tasks, copiedSubTaskRef.current)
+        ) {
+            copiedSubTaskRef.current = null;
+            setCopiedSubTask(null);
+        }
+
+        if (
+            cutSubTaskInfoRef.current
+            && !hasSubTaskIdInTasks(
+                tasks,
+                cutSubTaskInfoRef.current.parentTaskId,
+                cutSubTaskInfoRef.current.subTaskId,
+            )
+        ) {
+            cutSubTaskInfoRef.current = null;
+            setCutSubTaskInfo(null);
+        }
+    }, [tasks]);
+
     useEffect(function bindTaskKeyboardShortcuts() {
         function handleGlobalKeyDown(event) {
             const isAnyDrawerOpen = (
@@ -233,6 +306,8 @@ export default function App() {
             const currentCopiedTasks = copiedTasksRef.current;
             const currentCutTaskIds = cutTaskIdsRef.current;
             const currentTaskBufferMode = taskBufferModeRef.current;
+            const currentSelectedSubTask = selectedSubTaskRef.current;
+            const currentCutSubTaskInfo = cutSubTaskInfoRef.current;
 
             if (shouldUndoTasks(event, isAnyDrawerOpen)) {
                 event.preventDefault();
@@ -246,6 +321,36 @@ export default function App() {
                 return;
             }
 
+            // Route keyboard shortcuts for sub-task clipboard when a sub-task is selected
+            if (currentSelectedSubTask && !isAnyDrawerOpen && !isEditableTarget(event.target)) {
+                if (isCutKeyboardShortcut(event)) {
+                    event.preventDefault();
+                    handleCutSubTask(
+                        currentSelectedSubTask.parentTaskId,
+                        currentSelectedSubTask.subTask.id,
+                    );
+
+                    return;
+                }
+
+                if (isCopyKeyboardShortcut(event)) {
+                    event.preventDefault();
+                    handleCopySubTask(
+                        currentSelectedSubTask.parentTaskId,
+                        currentSelectedSubTask.subTask,
+                    );
+
+                    return;
+                }
+
+                if (isPasteKeyboardShortcut(event) && (copiedSubTaskRef.current || cutSubTaskInfoRef.current)) {
+                    event.preventDefault();
+                    handlePasteSubTask(currentSelectedSubTask.parentTaskId);
+
+                    return;
+                }
+            }
+
             if (shouldCutSelectedTasks(event, isAnyDrawerOpen, currentSelectedTaskIds)) {
                 event.preventDefault();
                 handleCutSelectedTasks();
@@ -255,6 +360,12 @@ export default function App() {
             if (shouldCancelCutTasks(event, isAnyDrawerOpen, currentTaskBufferMode)) {
                 event.preventDefault();
                 clearCutTaskBuffer();
+                return;
+            }
+
+            if (shouldCancelCutSubTask(event, isAnyDrawerOpen, currentCutSubTaskInfo)) {
+                event.preventDefault();
+                clearCutSubTaskBuffer();
                 return;
             }
 
@@ -409,6 +520,7 @@ export default function App() {
             afterSelectedTaskIds,
             "Add task",
         );
+        setSubTaskEditRequest(null);
         setIsDrawerOpen(false);
 
         return true;
@@ -440,6 +552,7 @@ export default function App() {
         const afterSelectedTaskIds = [taskId];
 
         if (hasSameTaskList(beforeTasks, afterTasks)) {
+            setSubTaskEditRequest(null);
             setIsDrawerOpen(false);
             return true;
         }
@@ -451,6 +564,7 @@ export default function App() {
             afterSelectedTaskIds,
             "Edit task",
         );
+        setSubTaskEditRequest(null);
         setIsDrawerOpen(false);
 
         return true;
@@ -465,6 +579,7 @@ export default function App() {
         }
 
         if (Object.keys(taskPatch).length === 0) {
+            setSubTaskEditRequest(null);
             setIsDrawerOpen(false);
             return true;
         }
@@ -479,6 +594,7 @@ export default function App() {
         });
 
         if (hasSameTaskList(beforeTasks, afterTasks)) {
+            setSubTaskEditRequest(null);
             setIsDrawerOpen(false);
             return true;
         }
@@ -490,18 +606,73 @@ export default function App() {
             beforeSelectedTaskIds,
             "Edit tasks",
         );
+        setSubTaskEditRequest(null);
         setIsDrawerOpen(false);
 
         return true;
     }
 
-    async function handleMoveTasks(taskId, dayDelta, rowDelta) {
+    async function handleMoveTasks(taskId, dayDelta, rowDelta, subTaskId = null) {
         if (dayDelta === 0 && rowDelta === 0) {
             return;
         }
 
         const beforeTasks = tasksRef.current;
         const beforeSelectedTaskIds = selectedTaskIdsRef.current;
+
+        if (subTaskId) {
+            const parentTask = beforeTasks.find(function matchTask(task) {
+                return task.id === taskId;
+            });
+
+            if (!parentTask || !parentTask.subTasks) {
+                return;
+            }
+
+            const movedSubTasks = sortSubTasksByStartDate(parentTask.subTasks.map(
+                function shiftSubTask(st) {
+                    if (st.id !== subTaskId) {
+                        return st;
+                    }
+
+                    return {
+                        ...st,
+                        startDate: addDaysToDateString(st.startDate, dayDelta),
+                        stopDate: addDaysToDateString(st.stopDate, dayDelta),
+                    };
+                },
+            ));
+
+            if (hasSubTaskOverlap(movedSubTasks)) {
+                return;
+            }
+
+            const computed = computeMultiPhaseTaskDates(movedSubTasks);
+            const updatedTask = { ...parentTask, subTasks: movedSubTasks, ...computed };
+            const afterTasks = replaceTaskById(beforeTasks, updatedTask);
+
+            commitTaskChange(
+                beforeTasks,
+                afterTasks,
+                beforeSelectedTaskIds,
+                [taskId],
+                "Move sub-task",
+            );
+
+            const movedSubTask = movedSubTasks.find(function matchMovedSubTask(subTask) {
+                return subTask.id === subTaskId;
+            });
+
+            if (movedSubTask) {
+                handleSelectSubTask({
+                    parentTaskId: taskId,
+                    subTask: movedSubTask,
+                });
+            }
+
+            return;
+        }
+
         const movingTaskIds = getMovingTaskIds(beforeTasks, beforeSelectedTaskIds, taskId);
         const movedTasks = moveTasks(beforeTasks, movingTaskIds, taskId, dayDelta, rowDelta);
 
@@ -518,7 +689,7 @@ export default function App() {
         );
     }
 
-    async function handleResizeTaskDates(taskId, resizeEdge, dayDelta) {
+    async function handleResizeTaskDates(taskId, resizeEdge, dayDelta, subTaskId = null) {
         if (dayDelta === 0) {
             return;
         }
@@ -530,6 +701,56 @@ export default function App() {
         });
 
         if (!task) {
+            return;
+        }
+
+        if (subTaskId) {
+            const resizedSubTasks = sortSubTasksByStartDate((task.subTasks || []).map(
+                function resizeSubTask(subTask) {
+                    if (subTask.id !== subTaskId) {
+                        return subTask;
+                    }
+
+                    return getResizedTask(subTask, resizeEdge, dayDelta);
+                },
+            ));
+
+            if (hasSubTaskOverlap(resizedSubTasks)) {
+                return;
+            }
+
+            const computed = computeMultiPhaseTaskDates(resizedSubTasks);
+            const optimisticTask = {
+                ...task,
+                subTasks: resizedSubTasks,
+                ...computed,
+            };
+
+            if (hasSameTaskValues(task, optimisticTask)) {
+                return;
+            }
+
+            const afterTasks = replaceTaskById(beforeTasks, optimisticTask);
+
+            commitTaskChange(
+                beforeTasks,
+                afterTasks,
+                beforeSelectedTaskIds,
+                [task.id],
+                "Resize sub-task",
+            );
+
+            const resizedSubTask = resizedSubTasks.find(function matchResizedSubTask(subTask) {
+                return subTask.id === subTaskId;
+            });
+
+            if (resizedSubTask) {
+                handleSelectSubTask({
+                    parentTaskId: taskId,
+                    subTask: resizedSubTask,
+                });
+            }
+
             return;
         }
 
@@ -553,6 +774,12 @@ export default function App() {
     async function handleDeleteSelectedTask() {
         const beforeTasks = tasksRef.current;
         const beforeSelectedTaskIds = selectedTaskIdsRef.current;
+        const beforeSelectedSubTasks = selectedSubTasksRef.current;
+
+        if (beforeSelectedSubTasks.length > 0) {
+            deleteSelectedSubTasks(beforeTasks, beforeSelectedTaskIds, beforeSelectedSubTasks);
+            return;
+        }
 
         if (beforeSelectedTaskIds.length === 0) {
             return;
@@ -570,6 +797,56 @@ export default function App() {
             [],
             "Delete task",
         );
+        clearSubTaskSelection();
+    }
+
+    function deleteSelectedSubTasks(beforeTasks, beforeSelectedTaskIds, beforeSelectedSubTasks) {
+        const selectedSubTaskIdsByParent = getSelectedSubTaskIdsByParent(beforeSelectedSubTasks);
+        const shouldClearCutSubTask = isCutSubTaskSelected(
+            cutSubTaskInfoRef.current,
+            selectedSubTaskIdsByParent,
+        );
+        const afterTasks = beforeTasks.map(function deleteSubTasksFromTask(task) {
+            const selectedSubTaskIds = selectedSubTaskIdsByParent.get(task.id);
+
+            if (!selectedSubTaskIds || !task.subTasks) {
+                return task;
+            }
+
+            const remainingSubTasks = sortSubTasksByStartDate(task.subTasks.filter(
+                function keepUnselectedSubTask(subTask) {
+                    return !selectedSubTaskIds.has(subTask.id);
+                },
+            ));
+            const computed = computeMultiPhaseTaskDates(remainingSubTasks);
+
+            return {
+                ...task,
+                subTasks: remainingSubTasks,
+                ...computed,
+            };
+        });
+
+        if (hasSameTaskList(beforeTasks, afterTasks)) {
+            clearSubTaskSelection();
+            if (shouldClearCutSubTask) {
+                clearCutSubTaskBuffer();
+            }
+            return;
+        }
+
+        commitTaskChange(
+            beforeTasks,
+            afterTasks,
+            beforeSelectedTaskIds,
+            beforeSelectedTaskIds,
+            getDeleteSubTaskHistoryLabel(beforeSelectedSubTasks),
+        );
+        clearSubTaskSelection();
+
+        if (shouldClearCutSubTask) {
+            clearCutSubTaskBuffer();
+        }
     }
 
     function handleCopySelectedTasks() {
@@ -618,6 +895,165 @@ export default function App() {
         setTaskBufferMode(TASK_BUFFER_MODE_CUT);
     }
 
+    function handleSelectSubTask(subTaskInfo, selectionMode = getDefaultSelectionMode()) {
+        if (!subTaskInfo) {
+            clearSubTaskSelection();
+            return;
+        }
+
+        const nextSelectedSubTasks = getNextSelectedSubTasks(
+            selectedSubTasksRef.current,
+            subTaskInfo,
+            selectionMode,
+        );
+        const nextSelectedSubTask = getLastSelectedSubTask(nextSelectedSubTasks);
+
+        selectedSubTasksRef.current = nextSelectedSubTasks;
+        selectedSubTaskRef.current = nextSelectedSubTask;
+        setSelectedSubTasks(nextSelectedSubTasks);
+        setSelectedSubTask(nextSelectedSubTask);
+    }
+
+    function clearSubTaskSelection() {
+        selectedSubTasksRef.current = [];
+        selectedSubTaskRef.current = null;
+        setSelectedSubTasks([]);
+        setSelectedSubTask(null);
+    }
+
+    function handleCopySubTask(parentTaskId, subTask) {
+        clearTaskClipboard();
+        copiedSubTaskRef.current = { parentTaskId, subTask };
+        cutSubTaskInfoRef.current = null;
+        setCopiedSubTask({ parentTaskId, subTask });
+        setCutSubTaskInfo(null);
+    }
+
+    function handleCutSubTask(parentTaskId, subTaskId) {
+        const info = { parentTaskId, subTaskId };
+
+        clearTaskClipboard();
+        cutSubTaskInfoRef.current = info;
+        copiedSubTaskRef.current = null;
+        setCutSubTaskInfo(info);
+        setCopiedSubTask(null);
+    }
+
+    function handlePasteSubTask(targetParentTaskId) {
+        const beforeTasks = tasksRef.current;
+        const beforeSelectedTaskIds = selectedTaskIdsRef.current;
+        const selectedDates = selectedDayOffDatesRef.current;
+        const targetDate = selectedDates.length > 0
+            ? selectedDates[selectedDates.length - 1]
+            : null;
+
+        if (!targetDate) {
+            return;
+        }
+
+        const isCut = Boolean(cutSubTaskInfoRef.current);
+        const sourceParentTaskId = isCut
+            ? cutSubTaskInfoRef.current.parentTaskId
+            : copiedSubTaskRef.current?.parentTaskId;
+
+        if (sourceParentTaskId !== targetParentTaskId) {
+            return;
+        }
+
+        const subTaskToCopy = isCut
+            ? (() => {
+                const { parentTaskId, subTaskId } = cutSubTaskInfoRef.current;
+                const sourceParent = beforeTasks.find(function matchParent(t) {
+                    return t.id === parentTaskId;
+                });
+
+                return sourceParent?.subTasks?.find(function matchSub(st) {
+                    return st.id === subTaskId;
+                }) || null;
+            })()
+            : copiedSubTaskRef.current?.subTask;
+
+        if (!subTaskToCopy) {
+            return;
+        }
+
+        const parentTask = beforeTasks.find(function matchParentTask(task) {
+            return task.id === targetParentTaskId;
+        });
+
+        if (!parentTask || !parentTask.subTasks) {
+            return;
+        }
+
+        const isReleaseSubTask = subTaskToCopy.taskType === RELEASE_TASK_TYPE;
+        const durationDays = getSubTaskDurationDayDelta(subTaskToCopy);
+        const newStartDate = targetDate;
+        const newStopDate = isReleaseSubTask
+            ? targetDate
+            : addDaysToDateString(targetDate, durationDays);
+
+        const newSubTask = {
+            ...subTaskToCopy,
+            id: isCut ? subTaskToCopy.id : createClientTaskId(),
+            startDate: newStartDate,
+            stopDate: newStopDate,
+        };
+
+        const excludeId = isCut ? cutSubTaskInfoRef.current.subTaskId : null;
+        const existingSubTasks = isCut && cutSubTaskInfoRef.current.parentTaskId === targetParentTaskId
+            ? parentTask.subTasks.filter(function excludeCut(st) {
+                return st.id !== excludeId;
+            })
+            : parentTask.subTasks;
+
+        if (doesSubTaskOverlap(existingSubTasks, newSubTask)) {
+            return;
+        }
+
+        const newSubTasks = sortSubTasksByStartDate([...existingSubTasks, newSubTask]);
+        const computed = computeMultiPhaseTaskDates(newSubTasks);
+        const updatedParent = { ...parentTask, subTasks: newSubTasks, ...computed };
+        let afterTasks = replaceTaskById(beforeTasks, updatedParent);
+
+        if (isCut) {
+            const cutInfo = cutSubTaskInfoRef.current;
+
+            if (cutInfo.parentTaskId !== targetParentTaskId) {
+                const sourceParent = afterTasks.find(function matchSource(t) {
+                    return t.id === cutInfo.parentTaskId;
+                });
+
+                if (sourceParent) {
+                    const remainingSubTasks = (sourceParent.subTasks || []).filter(
+                        function removeCut(st) {
+                            return st.id !== cutInfo.subTaskId;
+                        },
+                    );
+                    const sourceComputed = computeMultiPhaseTaskDates(remainingSubTasks);
+                    const updatedSource = {
+                        ...sourceParent,
+                        subTasks: remainingSubTasks,
+                        ...sourceComputed,
+                    };
+                    afterTasks = replaceTaskById(afterTasks, updatedSource);
+                }
+            }
+
+            cutSubTaskInfoRef.current = null;
+            copiedSubTaskRef.current = null;
+            setCutSubTaskInfo(null);
+            setCopiedSubTask(null);
+        }
+
+        commitTaskChange(
+            beforeTasks,
+            afterTasks,
+            beforeSelectedTaskIds,
+            [targetParentTaskId],
+            isCut ? "Move sub-task" : "Paste sub-task",
+        );
+    }
+
     function clearCutTaskBuffer() {
         if (taskBufferModeRef.current !== TASK_BUFFER_MODE_CUT) {
             return;
@@ -625,6 +1061,24 @@ export default function App() {
 
         cutTaskIdsRef.current = [];
         taskBufferModeRef.current = null;
+        setCutTaskIds([]);
+        setTaskBufferMode(null);
+    }
+
+    function clearCutSubTaskBuffer() {
+        if (!cutSubTaskInfoRef.current) {
+            return;
+        }
+
+        cutSubTaskInfoRef.current = null;
+        setCutSubTaskInfo(null);
+    }
+
+    function clearTaskClipboard() {
+        copiedTasksRef.current = [];
+        cutTaskIdsRef.current = [];
+        taskBufferModeRef.current = null;
+        setCopiedTasks([]);
         setCutTaskIds([]);
         setTaskBufferMode(null);
     }
@@ -696,6 +1150,7 @@ export default function App() {
     }
 
     function handleAddTaskClick() {
+        setSubTaskEditRequest(null);
         setDrawerMode("create");
         setIsDrawerOpen(true);
     }
@@ -861,14 +1316,30 @@ export default function App() {
             return;
         }
 
+        setSubTaskEditRequest(null);
         setDrawerMode("edit");
         setIsDrawerOpen(true);
     }
 
-    function handleOpenTaskEdit(taskId) {
+    function getNextSubTaskEditRequest(taskId, subTaskId) {
+        if (!subTaskId) {
+            return null;
+        }
+
+        subTaskEditRequestIdRef.current += 1;
+
+        return {
+            requestId: subTaskEditRequestIdRef.current,
+            taskId,
+            subTaskId,
+        };
+    }
+
+    function handleOpenTaskEdit(taskId, subTaskId = null) {
         lastSelectedTaskIdRef.current = taskId;
         selectedTaskIdsRef.current = [taskId];
         setSelectedTaskIds([taskId]);
+        setSubTaskEditRequest(getNextSubTaskEditRequest(taskId, subTaskId));
         setDrawerMode("edit");
         setIsDrawerOpen(true);
     }
@@ -1104,42 +1575,53 @@ export default function App() {
 
     function handleSelectTask(taskId, selectionMode = getDefaultSelectionMode(), taskOrder = []) {
         const taskOrderIds = getTaskOrderIds(taskOrder, tasksRef.current);
+        const nextTaskIds = getNextSelectedTaskIds(
+            selectedTaskIdsRef.current,
+            taskId,
+            selectionMode,
+            lastSelectedTaskIdRef.current,
+            taskOrderIds,
+        );
 
-        setSelectedTaskIds(function updateSelectedTaskIds(currentTaskIds) {
-            const nextTaskIds = getNextSelectedTaskIds(
-                currentTaskIds,
-                taskId,
-                selectionMode,
-                lastSelectedTaskIdRef.current,
-                taskOrderIds,
-            );
+        if (!selectionMode.isRangeSelect) {
+            lastSelectedTaskIdRef.current = taskId;
+        }
 
-            if (!selectionMode.isRangeSelect) {
-                lastSelectedTaskIdRef.current = taskId;
-            }
-
-            selectedTaskIdsRef.current = nextTaskIds;
-
-            return nextTaskIds;
-        });
+        selectedTaskIdsRef.current = nextTaskIds;
+        setSelectedTaskIds(nextTaskIds);
+        clearSubTaskSelectionForTaskSelection(nextTaskIds, selectionMode);
     }
 
     function handleSelectTasks(taskIds, selectionMode = getDefaultSelectionMode(), taskOrder = []) {
         const taskOrderIds = getTaskOrderIds(taskOrder, tasksRef.current);
+        const nextTaskIds = getNextBulkSelectedTaskIds(
+            selectedTaskIdsRef.current,
+            taskIds,
+            selectionMode,
+            taskOrderIds,
+        );
 
-        setSelectedTaskIds(function updateSelectedTaskIds(currentTaskIds) {
-            const nextTaskIds = getNextBulkSelectedTaskIds(
-                currentTaskIds,
-                taskIds,
-                selectionMode,
-                taskOrderIds,
-            );
+        lastSelectedTaskIdRef.current = getLastSelectedTaskId(nextTaskIds);
+        selectedTaskIdsRef.current = nextTaskIds;
+        setSelectedTaskIds(nextTaskIds);
+        clearSubTaskSelectionForTaskSelection(nextTaskIds, selectionMode);
+    }
 
-            lastSelectedTaskIdRef.current = getLastSelectedTaskId(nextTaskIds);
-            selectedTaskIdsRef.current = nextTaskIds;
+    function clearSubTaskSelectionForTaskSelection(taskIds, selectionMode) {
+        const currentSelectedSubTask = selectedSubTaskRef.current;
 
-            return nextTaskIds;
-        });
+        if (!currentSelectedSubTask) {
+            return;
+        }
+
+        if (!selectionMode.isMultiSelect && !selectionMode.isRangeSelect) {
+            clearSubTaskSelection();
+            return;
+        }
+
+        if (!taskIds.includes(currentSelectedSubTask.parentTaskId)) {
+            clearSubTaskSelection();
+        }
     }
 
     function handleTimelineZoom(zoomDirection) {
@@ -1207,6 +1689,13 @@ export default function App() {
                 lastSelectedTaskIdRef.current = null;
             }
 
+            if (
+                selectedSubTaskRef.current
+                && !loadedTaskIds.has(selectedSubTaskRef.current.parentTaskId)
+            ) {
+                clearSubTaskSelection();
+            }
+
             selectedTaskIdsRef.current = nextSelectedTaskIds;
 
             return nextSelectedTaskIds;
@@ -1222,7 +1711,8 @@ export default function App() {
         return task.id === selectedTaskId;
     }) || null;
     const selectedTasks = getTasksByIdsInTaskOrder(tasks, selectedTaskIds);
-    const canEditSelectedTask = selectedTaskIds.length > 0;
+    const canEditSelectedTask = selectedTaskIds.length > 0
+        && !hasMixedMultiPhaseAndNormalSelection(tasks, selectedTaskIds);
     const canCopySelectedTasks = selectedTaskIds.length > 0;
     const canCutSelectedTasks = selectedTaskIds.length > 0;
     const canPasteBufferedTasks = canPasteTaskBuffer(taskBufferMode, copiedTasks, cutTaskIds);
@@ -1253,6 +1743,8 @@ export default function App() {
                     canCutSelectedTasks={canCutSelectedTasks}
                     canPasteCopiedTasks={canPasteBufferedTasks}
                     cutTaskIds={cutTaskIds}
+                    cutSubTaskInfo={cutSubTaskInfo}
+                    selectedSubTasks={selectedSubTasks}
                     drawerMode={drawerMode}
                     dayOffDrawerMode={dayOffDrawerMode}
                     dayOffInitialValues={dayOffDrawerInitialValues}
@@ -1260,6 +1752,7 @@ export default function App() {
                     showTimelineHorizontalGridLines={showTimelineHorizontalGridLines}
                     selectedTask={selectedTask}
                     selectedTasks={selectedTasks}
+                    subTaskEditRequest={subTaskEditRequest}
                     zoomIndex={zoomIndex}
                     zoomMode={zoomMode}
                     onAddTaskClick={handleAddTaskClick}
@@ -1272,6 +1765,7 @@ export default function App() {
                         handleTimelineHorizontalGridLinesToggle
                     }
                     onDrawerClose={function closeDrawer() {
+                        setSubTaskEditRequest(null);
                         setIsDrawerOpen(false);
                     }}
                     onCreateTask={handleCreateTask}
@@ -1287,13 +1781,18 @@ export default function App() {
                     onRefreshPlanner={handleRefreshPlanner}
                     onRedoTaskChange={handleRedoTaskChange}
                     onResizeTaskDates={handleResizeTaskDates}
+                    onSubTaskSelect={handleSelectSubTask}
                     onClearSelection={function clearSelection() {
                         lastSelectedTaskIdRef.current = null;
                         lastSelectedDayOffDateRef.current = null;
                         selectedTaskIdsRef.current = [];
                         selectedDayOffDatesRef.current = [];
+                        selectedSubTaskRef.current = null;
+                        selectedSubTasksRef.current = [];
                         setSelectedTaskIds([]);
                         setSelectedDayOffDates([]);
+                        setSelectedSubTask(null);
+                        setSelectedSubTasks([]);
                     }}
                     onSelectTask={handleSelectTask}
                     onSelectTasks={handleSelectTasks}
@@ -1543,6 +2042,19 @@ function shouldCancelCutTasks(event, isAnyDrawerOpen, taskBufferMode) {
 }
 
 
+function shouldCancelCutSubTask(event, isAnyDrawerOpen, cutSubTaskInfo) {
+    if (event.repeat || isAnyDrawerOpen || !cutSubTaskInfo) {
+        return false;
+    }
+
+    if (event.key !== "Escape") {
+        return false;
+    }
+
+    return !isEditableTarget(event.target);
+}
+
+
 function canPasteTaskBuffer(taskBufferMode, copiedTasks, cutTaskIds) {
     if (taskBufferMode === TASK_BUFFER_MODE_COPY) {
         return copiedTasks.length > 0;
@@ -1664,9 +2176,15 @@ function pushLimitedHistoryEntry(historyStack, historyEntry) {
 
 function cloneTasks(tasks) {
     return tasks.map(function cloneTask(task) {
-        return {
-            ...task,
-        };
+        const cloned = { ...task };
+
+        if (task.subTasks) {
+            cloned.subTasks = task.subTasks.map(function cloneSubTask(st) {
+                return { ...st };
+            });
+        }
+
+        return cloned;
     });
 }
 
@@ -1960,6 +2478,19 @@ function shiftTasksByDays(tasks, taskIds, dayDelta) {
             return task;
         }
 
+        if (task.taskType === MULTI_PHASE_TASK_TYPE && task.subTasks?.length > 0) {
+            const shiftedSubTasks = task.subTasks.map(function shiftSub(st) {
+                return {
+                    ...st,
+                    startDate: addDaysToDateString(st.startDate, dayDelta),
+                    stopDate: addDaysToDateString(st.stopDate, dayDelta),
+                };
+            });
+            const computed = computeMultiPhaseTaskDates(shiftedSubTasks);
+
+            return { ...task, subTasks: shiftedSubTasks, ...computed };
+        }
+
         return {
             ...task,
             startDate: addDaysToDateString(task.startDate, dayDelta),
@@ -2170,6 +2701,18 @@ function applyBulkTaskPatch(task, taskPatch) {
             return;
         }
 
+        if (nextTaskType === MULTI_PHASE_TASK_TYPE && fieldName === "startDate") {
+            return;
+        }
+
+        if (nextTaskType === MULTI_PHASE_TASK_TYPE && fieldName === "stopDate") {
+            return;
+        }
+
+        if (nextTaskType === MULTI_PHASE_TASK_TYPE && fieldName === "progressPercent") {
+            return;
+        }
+
         updatedTask[fieldName] = fieldValue;
     });
 
@@ -2181,6 +2724,148 @@ function applyBulkTaskPatch(task, taskPatch) {
     }
 
     return updatedTask;
+}
+
+
+function hasMixedMultiPhaseAndNormalSelection(tasks, selectedTaskIds) {
+    if (selectedTaskIds.length <= 1) {
+        return false;
+    }
+
+    const selectedTaskIdSet = new Set(selectedTaskIds);
+    const selectedTasks = tasks.filter(function matchSelected(task) {
+        return selectedTaskIdSet.has(task.id);
+    });
+    const hasMultiPhase = selectedTasks.some(function matchMultiPhase(task) {
+        return task.taskType === MULTI_PHASE_TASK_TYPE;
+    });
+    const hasNonMultiPhase = selectedTasks.some(function matchNonMultiPhase(task) {
+        return task.taskType !== MULTI_PHASE_TASK_TYPE;
+    });
+
+    return hasMultiPhase && hasNonMultiPhase;
+}
+
+
+function getNextSelectedSubTasks(currentSubTasks, subTaskInfo, selectionMode) {
+    if (!selectionMode.isMultiSelect) {
+        return [subTaskInfo];
+    }
+
+    const selectedSubTaskKey = getSubTaskSelectionKey(subTaskInfo);
+    const isAlreadySelected = currentSubTasks.some(function matchSelectedSubTask(
+        currentSubTaskInfo,
+    ) {
+        return getSubTaskSelectionKey(currentSubTaskInfo) === selectedSubTaskKey;
+    });
+
+    if (isAlreadySelected) {
+        return currentSubTasks.filter(function keepOtherSubTask(currentSubTaskInfo) {
+            return getSubTaskSelectionKey(currentSubTaskInfo) !== selectedSubTaskKey;
+        });
+    }
+
+    return [...currentSubTasks, subTaskInfo];
+}
+
+
+function getLastSelectedSubTask(selectedSubTasks) {
+    if (selectedSubTasks.length === 0) {
+        return null;
+    }
+
+    return selectedSubTasks[selectedSubTasks.length - 1];
+}
+
+
+function getSubTaskSelectionKey(subTaskInfo) {
+    return `${subTaskInfo.parentTaskId}:${subTaskInfo.subTask.id}`;
+}
+
+
+function hasSubTaskInTasks(tasks, subTaskInfo) {
+    if (!subTaskInfo) {
+        return false;
+    }
+
+    return hasSubTaskIdInTasks(
+        tasks,
+        subTaskInfo.parentTaskId,
+        subTaskInfo.subTask.id,
+    );
+}
+
+
+function hasSubTaskIdInTasks(tasks, parentTaskId, subTaskId) {
+    const parentTask = tasks.find(function matchParentTask(task) {
+        return task.id === parentTaskId;
+    });
+
+    if (!parentTask || !parentTask.subTasks) {
+        return false;
+    }
+
+    return parentTask.subTasks.some(function matchSubTask(subTask) {
+        return subTask.id === subTaskId;
+    });
+}
+
+
+function getSelectedSubTaskIdsByParent(selectedSubTasks) {
+    const selectedSubTaskIdsByParent = new Map();
+
+    selectedSubTasks.forEach(function groupSelectedSubTask(subTaskInfo) {
+        if (!selectedSubTaskIdsByParent.has(subTaskInfo.parentTaskId)) {
+            selectedSubTaskIdsByParent.set(subTaskInfo.parentTaskId, new Set());
+        }
+
+        selectedSubTaskIdsByParent.get(subTaskInfo.parentTaskId).add(subTaskInfo.subTask.id);
+    });
+
+    return selectedSubTaskIdsByParent;
+}
+
+
+function isCutSubTaskSelected(cutSubTaskInfo, selectedSubTaskIdsByParent) {
+    if (!cutSubTaskInfo) {
+        return false;
+    }
+
+    const selectedSubTaskIds = selectedSubTaskIdsByParent.get(cutSubTaskInfo.parentTaskId);
+
+    if (!selectedSubTaskIds) {
+        return false;
+    }
+
+    return selectedSubTaskIds.has(cutSubTaskInfo.subTaskId);
+}
+
+
+function getDeleteSubTaskHistoryLabel(selectedSubTasks) {
+    return selectedSubTasks.length === 1 ? "Delete sub-task" : "Delete sub-tasks";
+}
+
+
+function hasSameSubTasks(aSubTasks, bSubTasks) {
+    const aList = aSubTasks || [];
+    const bList = bSubTasks || [];
+
+    if (aList.length !== bList.length) {
+        return false;
+    }
+
+    return aList.every(function matchSubTask(st, i) {
+        const bSt = bList[i];
+
+        return (
+            st.id === bSt.id
+            && st.name === bSt.name
+            && st.taskType === bSt.taskType
+            && st.startDate === bSt.startDate
+            && st.stopDate === bSt.stopDate
+            && st.progressPercent === bSt.progressPercent
+        );
+    });
 }
 
 
@@ -2196,6 +2881,7 @@ function hasSameTaskValues(task, expectedTask) {
         && task.startDate === expectedTask.startDate
         && task.stopDate === expectedTask.stopDate
         && task.progressPercent === expectedTask.progressPercent
+        && hasSameSubTasks(task.subTasks, expectedTask.subTasks)
     );
 }
 

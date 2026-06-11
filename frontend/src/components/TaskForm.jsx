@@ -1,9 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import AccountTreeOutlinedIcon from "@mui/icons-material/AccountTreeOutlined";
+import AssignmentIcon from "@mui/icons-material/Assignment";
 import ManageAccountsOutlinedIcon from "@mui/icons-material/ManageAccountsOutlined";
 import {
     Box,
     Button,
+    Dialog,
+    DialogActions,
+    DialogContent,
+    DialogContentText,
+    DialogTitle,
     FormControl,
     FormHelperText,
     IconButton,
@@ -13,19 +19,28 @@ import {
     Slider,
     TextField,
     Tooltip,
+    Typography,
 } from "@mui/material";
 
 import AssigneeManagerDialog from "./AssigneeManagerDialog";
+import PlannerDateField from "./PlannerDateField";
 import ProjectManagerDialog from "./ProjectManagerDialog";
+import SubTaskDialog from "./SubTaskDialog";
 import {
     DEFAULT_TASK_LEVEL,
     DEFAULT_TASK_TYPE,
+    MULTI_PHASE_TASK_TYPE,
     NO_PROJECT_NAME,
     RELEASE_TASK_TYPE,
     TASK_LEVEL_OPTIONS,
     TASK_TYPE_OPTIONS,
     UNASSIGNED_ASSIGNEE,
 } from "../constants/taskOptions";
+import { computeMultiPhaseTaskDates } from "../utils/chartScale";
+import {
+    createClientSubTaskId,
+    sortSubTasksByStartDate,
+} from "../utils/subTasks";
 
 
 const DEFAULT_FORM_VALUES = {
@@ -39,25 +54,12 @@ const DEFAULT_FORM_VALUES = {
     startDate: "",
     stopDate: "",
     progressPercent: 0,
+    subTasks: [],
 };
 const FORM_FIELD_NAMES = Object.keys(DEFAULT_FORM_VALUES);
 const MIXED_TEXT_VALUE = "...";
 const MIXED_SELECT_VALUE = "__mixed__";
 const PROGRESS_SLIDER_STEP = 5;
-const PROGRESS_SLIDER_MARKS = [
-    {
-        value: 0,
-        label: "0%",
-    },
-    {
-        value: 50,
-        label: "50%",
-    },
-    {
-        value: 100,
-        label: "100%",
-    },
-];
 
 
 export default function TaskForm(props) {
@@ -69,6 +71,7 @@ export default function TaskForm(props) {
         projectNames = [],
         isAssigneeSaving,
         isProjectSaving,
+        subTaskEditRequest,
         onCancel,
         onSaveAssignees,
         onSaveProjectNames,
@@ -89,6 +92,8 @@ export default function TaskForm(props) {
     });
     const [isAssigneeManagerOpen, setIsAssigneeManagerOpen] = useState(false);
     const [isProjectManagerOpen, setIsProjectManagerOpen] = useState(false);
+    const [isSubTaskDialogOpen, setIsSubTaskDialogOpen] = useState(false);
+    const [pendingTaskType, setPendingTaskType] = useState(null);
     const assigneeOptions = useMemo(function memoizeAssigneeOptions() {
         return getAssigneeOptions(assignees);
     }, [assignees]);
@@ -96,14 +101,27 @@ export default function TaskForm(props) {
         return getProjectOptions(projectNames);
     }, [projectNames]);
     const isReleaseTask = formValues.taskType === RELEASE_TASK_TYPE;
+    const isMultiPhaseTask = formValues.taskType === MULTI_PHASE_TASK_TYPE;
     const shouldShowDateRangeFields = shouldShowTaskDateRangeFields(
         isBulkEditMode,
         isReleaseTask,
+        isMultiPhaseTask,
     );
     const shouldShowTaskLevelField = shouldShowTaskLevelSelect(
         isBulkEditMode,
         isReleaseTask,
+        isMultiPhaseTask,
     );
+    const shouldShowProgressField = !isMultiPhaseTask || isBulkEditMode;
+    const initialEditSubTaskId = getInitialEditSubTaskId(
+        subTaskEditRequest,
+        initialTask,
+        isMultiPhaseTask,
+        formValues.subTasks,
+    );
+    const initialEditSubTaskRequestId = initialEditSubTaskId
+        ? subTaskEditRequest.requestId
+        : null;
 
     useEffect(function keepSelectedAssigneeSupported() {
         setFormValues(function updateUnsupportedAssignee(currentValues) {
@@ -139,6 +157,14 @@ export default function TaskForm(props) {
         });
     }, [projectOptions]);
 
+    useEffect(function openRequestedSubTaskEditor() {
+        if (!initialEditSubTaskId) {
+            return;
+        }
+
+        setIsSubTaskDialogOpen(true);
+    }, [initialEditSubTaskId, initialEditSubTaskRequestId]);
+
     function handleFieldChange(event) {
         const { name, value } = event.target;
 
@@ -170,11 +196,40 @@ export default function TaskForm(props) {
     }
 
     function handleTaskTypeChange(taskType) {
+        const leavingMultiPhase = (
+            formValues.taskType === MULTI_PHASE_TASK_TYPE
+            && taskType !== MULTI_PHASE_TASK_TYPE
+            && formValues.subTasks.length > 0
+        );
+
+        if (leavingMultiPhase) {
+            setPendingTaskType(taskType);
+
+            return;
+        }
+
+        applyTaskTypeChange(taskType);
+    }
+
+    function applyTaskTypeChange(taskType) {
         setFormValues(function updateTaskType(currentValues) {
             if (taskType !== RELEASE_TASK_TYPE) {
+                const isEnteringMultiPhase = (
+                    taskType === MULTI_PHASE_TASK_TYPE
+                    && currentValues.taskType !== MULTI_PHASE_TASK_TYPE
+                    && isEditMode
+                    && !isBulkEditMode
+                );
+                const subTasks = getSubTasksForTaskTypeChange(
+                    currentValues,
+                    taskType,
+                    isEnteringMultiPhase,
+                );
+
                 return {
                     ...currentValues,
                     taskType,
+                    subTasks,
                 };
             }
 
@@ -187,8 +242,33 @@ export default function TaskForm(props) {
                 startDate: releaseDate,
                 stopDate: releaseDate,
                 progressPercent: 100,
+                subTasks: [],
             };
         });
+    }
+
+    function handleConfirmTypeChange() {
+        if (!pendingTaskType) {
+            return;
+        }
+
+        applyTaskTypeChange(pendingTaskType);
+        setPendingTaskType(null);
+    }
+
+    function handleCancelTypeChange() {
+        setPendingTaskType(null);
+    }
+
+    function handleSubTasksSave(newSubTasks) {
+        markFieldDirty("subTasks");
+        setFormValues(function updateSubTasks(currentValues) {
+            return {
+                ...currentValues,
+                subTasks: sortSubTasksByStartDate(newSubTasks),
+            };
+        });
+        setIsSubTaskDialogOpen(false);
     }
 
     function handleProgressChange(_, value) {
@@ -389,30 +469,46 @@ export default function TaskForm(props) {
                         </IconButton>
                     </Tooltip>
                 </Box>
-                <FormControl fullWidth required error={Boolean(formErrors.taskType)}>
-                    <InputLabel id="task-type-label">Task type</InputLabel>
-                    <Select
-                        labelId="task-type-label"
-                        label="Task type"
-                        name="taskType"
-                        value={formValues.taskType}
-                        onChange={handleFieldChange}
-                    >
-                        {formValues.taskType === MIXED_SELECT_VALUE && (
-                            <MenuItem value={MIXED_SELECT_VALUE} disabled>
-                                Mixed values
-                            </MenuItem>
-                        )}
-                        {TASK_TYPE_OPTIONS.map(function renderTaskType(option) {
-                            return (
-                                <MenuItem key={option} value={option}>
-                                    {option}
+                <Box className="assignee-field-row">
+                    <FormControl fullWidth required error={Boolean(formErrors.taskType)}>
+                        <InputLabel id="task-type-label">Task type</InputLabel>
+                        <Select
+                            labelId="task-type-label"
+                            label="Task type"
+                            name="taskType"
+                            value={formValues.taskType}
+                            onChange={handleFieldChange}
+                        >
+                            {formValues.taskType === MIXED_SELECT_VALUE && (
+                                <MenuItem value={MIXED_SELECT_VALUE} disabled>
+                                    Mixed values
                                 </MenuItem>
-                            );
-                        })}
-                    </Select>
-                    {formErrors.taskType && <FormHelperText>{formErrors.taskType}</FormHelperText>}
-                </FormControl>
+                            )}
+                            {TASK_TYPE_OPTIONS.map(function renderTaskType(option) {
+                                return (
+                                    <MenuItem key={option} value={option}>
+                                        {option}
+                                    </MenuItem>
+                                );
+                            })}
+                        </Select>
+                        {formErrors.taskType && (
+                            <FormHelperText>{formErrors.taskType}</FormHelperText>
+                        )}
+                    </FormControl>
+                    <Tooltip title="Manage sub-tasks">
+                        <IconButton
+                            className="assignee-manager-button"
+                            aria-label="Manage sub-tasks"
+                            disabled={!isMultiPhaseTask || isBulkEditMode || isSaving}
+                            onClick={function openSubTaskDialog() {
+                                setIsSubTaskDialogOpen(true);
+                            }}
+                        >
+                            <AssignmentIcon fontSize="small" />
+                        </IconButton>
+                    </Tooltip>
+                </Box>
                 {shouldShowTaskLevelField && (
                     <FormControl fullWidth>
                         <InputLabel id="task-level-label">Task level</InputLabel>
@@ -473,11 +569,10 @@ export default function TaskForm(props) {
                         </IconButton>
                     </Tooltip>
                 </Box>
-                {!shouldShowDateRangeFields ? (
-                    <TextField
+                {(!shouldShowDateRangeFields && !isMultiPhaseTask) ? (
+                    <PlannerDateField
                         label="Release date"
                         name="startDate"
-                        type="date"
                         value={formValues.startDate}
                         error={Boolean(formErrors.startDate)}
                         helperText={getFieldHelperText(
@@ -493,15 +588,14 @@ export default function TaskForm(props) {
                             isBulkEditMode,
                         )}
                         fullWidth
-                        InputLabelProps={{ shrink: true }}
                         onChange={handleFieldChange}
                     />
                 ) : (
+                    !isMultiPhaseTask && (
                     <Box className="date-field-row">
-                        <TextField
+                        <PlannerDateField
                             label="Start date"
                             name="startDate"
-                            type="date"
                             value={formValues.startDate}
                             error={Boolean(formErrors.startDate)}
                             helperText={getFieldHelperText(
@@ -517,13 +611,11 @@ export default function TaskForm(props) {
                                 isBulkEditMode,
                             )}
                             fullWidth
-                            InputLabelProps={{ shrink: true }}
                             onChange={handleFieldChange}
                         />
-                        <TextField
+                        <PlannerDateField
                             label="Stop date"
                             name="stopDate"
-                            type="date"
                             value={formValues.stopDate}
                             error={Boolean(formErrors.stopDate)}
                             helperText={getFieldHelperText(
@@ -542,30 +634,30 @@ export default function TaskForm(props) {
                                 )
                             }
                             fullWidth
-                            InputLabelProps={{ shrink: true }}
                             onChange={handleFieldChange}
                         />
                     </Box>
+                    )
                 )}
-                {(!isReleaseTask || isBulkEditMode) && (
+                {shouldShowProgressField && (!isReleaseTask || isBulkEditMode) && (
                     <Box className="progress-field">
-                        <Slider
-                            className="progress-slider"
-                            value={formValues.progressPercent}
-                            min={0}
-                            max={100}
-                            step={PROGRESS_SLIDER_STEP}
-                            marks={PROGRESS_SLIDER_MARKS}
-                            valueLabelDisplay="on"
-                            valueLabelFormat={function formatSliderProgressValue(value) {
-                                return formatProgressValue(
-                                    value,
+                        <Box className="sub-task-inline-progress">
+                            <Typography variant="body2">
+                                {formatProgressValue(
+                                    formValues.progressPercent,
                                     mixedFields.has("progressPercent"),
                                     dirtyFields.has("progressPercent"),
-                                );
-                            }}
-                            onChange={handleProgressChange}
-                        />
+                                )}
+                            </Typography>
+                            <Slider
+                                value={formValues.progressPercent}
+                                min={0}
+                                max={100}
+                                step={PROGRESS_SLIDER_STEP}
+                                size="small"
+                                onChange={handleProgressChange}
+                            />
+                        </Box>
                         {getFieldHelperText(
                             "progressPercent",
                             formErrors,
@@ -582,6 +674,11 @@ export default function TaskForm(props) {
                             </FormHelperText>
                         )}
                     </Box>
+                )}
+                {formErrors.subTasks && (
+                    <Typography variant="caption" color="error">
+                        {formErrors.subTasks}
+                    </Typography>
                 )}
                 <Box className="task-form-actions">
                     <Button
@@ -616,6 +713,32 @@ export default function TaskForm(props) {
                 onClose={handleCloseProjectManager}
                 onSave={handleSaveProjectNames}
             />
+            <SubTaskDialog
+                open={isSubTaskDialogOpen}
+                subTasks={formValues.subTasks}
+                initialEditSubTaskId={initialEditSubTaskId}
+                initialEditRequestId={initialEditSubTaskRequestId}
+                onClose={function closeSubTaskDialog() {
+                    setIsSubTaskDialogOpen(false);
+                }}
+                onSave={handleSubTasksSave}
+            />
+            <Dialog open={pendingTaskType !== null} onClose={handleCancelTypeChange}>
+                <DialogTitle>Change Task Type?</DialogTitle>
+                <DialogContent>
+                    <DialogContentText>
+                        Changing the task type will remove all sub-tasks. Continue?
+                    </DialogContentText>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={handleCancelTypeChange} color="inherit">
+                        Cancel
+                    </Button>
+                    <Button onClick={handleConfirmTypeChange} color="error" variant="contained">
+                        Remove Sub-tasks
+                    </Button>
+                </DialogActions>
+            </Dialog>
         </>
     );
 }
@@ -630,6 +753,14 @@ function validateForm(formValues) {
 
     if (!formValues.taskType.trim()) {
         errors.taskType = "Task type is required.";
+    }
+
+    if (formValues.taskType === MULTI_PHASE_TASK_TYPE) {
+        if (!formValues.subTasks || formValues.subTasks.length === 0) {
+            errors.subTasks = "At least one sub-task is required.";
+        }
+
+        return errors;
     }
 
     if (!formValues.startDate) {
@@ -713,13 +844,81 @@ function getInitialFormValuesForMode(initialTask, editTasks) {
 }
 
 
-function shouldShowTaskDateRangeFields(isBulkEditMode, isReleaseTask) {
+function shouldShowTaskDateRangeFields(isBulkEditMode, isReleaseTask, isMultiPhaseTask) {
+    if (isMultiPhaseTask && !isBulkEditMode) {
+        return false;
+    }
+
     return isBulkEditMode || !isReleaseTask;
 }
 
 
-function shouldShowTaskLevelSelect(isBulkEditMode, isReleaseTask) {
+function shouldShowTaskLevelSelect(isBulkEditMode, isReleaseTask, isMultiPhaseTask) {
+    if (isMultiPhaseTask && !isBulkEditMode) {
+        return false;
+    }
+
     return isBulkEditMode || !isReleaseTask;
+}
+
+
+function getSubTasksForTaskTypeChange(currentValues, taskType, isEnteringMultiPhase) {
+    if (taskType !== MULTI_PHASE_TASK_TYPE) {
+        return [];
+    }
+
+    if (!isEnteringMultiPhase) {
+        return currentValues.subTasks;
+    }
+
+    return [createSubTaskFromTaskValues(currentValues)];
+}
+
+
+function createSubTaskFromTaskValues(taskValues) {
+    const isRelease = taskValues.taskType === RELEASE_TASK_TYPE;
+    const startDate = taskValues.startDate;
+    const stopDate = isRelease ? startDate : taskValues.stopDate;
+
+    return {
+        id: createClientSubTaskId(),
+        name: taskValues.name,
+        taskType: getSubTaskTypeFromTaskType(taskValues.taskType),
+        startDate,
+        stopDate,
+        progressPercent: isRelease ? 100 : taskValues.progressPercent,
+    };
+}
+
+
+function getSubTaskTypeFromTaskType(taskType) {
+    if (taskType === MULTI_PHASE_TASK_TYPE || taskType === MIXED_SELECT_VALUE) {
+        return DEFAULT_TASK_TYPE;
+    }
+
+    return getSupportedTaskType(taskType);
+}
+
+
+function getInitialEditSubTaskId(subTaskEditRequest, initialTask, isMultiPhaseTask, subTasks) {
+    if (!subTaskEditRequest || !initialTask || !isMultiPhaseTask) {
+        return null;
+    }
+
+    if (subTaskEditRequest.taskId !== initialTask.id) {
+        return null;
+    }
+
+    const currentSubTasks = Array.isArray(subTasks) ? subTasks : [];
+    const hasRequestedSubTask = currentSubTasks.some(function matchRequestedSubTask(subTask) {
+        return subTask.id === subTaskEditRequest.subTaskId;
+    });
+
+    if (!hasRequestedSubTask) {
+        return null;
+    }
+
+    return subTaskEditRequest.subTaskId;
 }
 
 
@@ -732,6 +931,7 @@ function getInitialFormValues(task) {
 
     const taskType = getSupportedTaskType(task.taskType);
     const isReleaseTask = taskType === RELEASE_TASK_TYPE;
+    const isMultiPhase = taskType === MULTI_PHASE_TASK_TYPE;
 
     return {
         name: task.name || "",
@@ -740,16 +940,17 @@ function getInitialFormValues(task) {
         assignee: task.assignee || UNASSIGNED_ASSIGNEE,
         projectName: task.projectName || NO_PROJECT_NAME,
         taskType,
-        taskLevel: isReleaseTask
+        taskLevel: (isReleaseTask || isMultiPhase)
             ? DEFAULT_TASK_LEVEL
             : getSupportedTaskLevel(task.taskLevel),
-        startDate: task.startDate || "",
+        startDate: isMultiPhase ? (task.startDate || "") : (task.startDate || ""),
         stopDate: isReleaseTask
             ? task.startDate || ""
             : task.stopDate || "",
         progressPercent: isReleaseTask
             ? 100
             : task.progressPercent || 0,
+        subTasks: isMultiPhase ? (task.subTasks || []) : [],
     };
 }
 
@@ -772,6 +973,23 @@ function getBulkInitialFormValues(tasks) {
 
 
 function normalizeTaskDraft(formValues) {
+    if (formValues.taskType === MULTI_PHASE_TASK_TYPE) {
+        const sortedSubTasks = sortSubTasksByStartDate(formValues.subTasks);
+        const computed = computeMultiPhaseTaskDates(sortedSubTasks);
+
+        return {
+            name: formValues.name.trim(),
+            description: formValues.description.trim(),
+            url: formValues.url.trim(),
+            assignee: formValues.assignee,
+            projectName: formValues.projectName,
+            taskType: MULTI_PHASE_TASK_TYPE,
+            taskLevel: DEFAULT_TASK_LEVEL,
+            subTasks: sortedSubTasks,
+            ...computed,
+        };
+    }
+
     return {
         name: formValues.name.trim(),
         description: formValues.description.trim(),

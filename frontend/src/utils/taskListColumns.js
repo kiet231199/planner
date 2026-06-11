@@ -1,5 +1,6 @@
 import {
     DEFAULT_TASK_LEVEL,
+    MULTI_PHASE_TASK_TYPE,
     NO_PROJECT_NAME,
     RELEASE_TASK_TYPE,
     UNASSIGNED_ASSIGNEE,
@@ -187,7 +188,7 @@ export function getTaskAssigneeLabel(task) {
 
 
 function getTaskLevelLabel(task) {
-    if (task.taskType === RELEASE_TASK_TYPE) {
+    if (task.taskType === RELEASE_TASK_TYPE || task.taskType === MULTI_PHASE_TASK_TYPE) {
         return DEFAULT_TASK_LEVEL;
     }
 

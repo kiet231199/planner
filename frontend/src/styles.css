@@ -940,6 +940,58 @@ body.task-list-resizing {
     white-space: nowrap;
 }
 
+
+/* Multi-phase wrapper bar */
+
+.task-bar-multi-phase-wrapper {
+    border: 2px dashed var(--planner-border-color);
+    background: rgba(109, 40, 217, 0.14);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+    box-shadow: none;
+    overflow: visible;
+    cursor: grab;
+}
+
+.task-bar-multi-phase-wrapper:hover,
+.task-bar-multi-phase-wrapper.task-bar-selected {
+    box-shadow: 0 0 0 2px var(--planner-task-selected-outline);
+}
+
+.task-bar-multi-phase-wrapper.task-bar-delayed {
+    box-shadow:
+        0 0 18px 4px var(--planner-task-delayed-glow-soft-color),
+        0 0 28px 8px rgba(183, 28, 28, 0.26),
+        0 1px 2px var(--planner-task-shadow);
+}
+
+.task-bar-multi-phase-wrapper.task-bar-delayed:hover,
+.task-bar-multi-phase-wrapper.task-bar-delayed.task-bar-selected {
+    box-shadow:
+        0 0 0 2px var(--planner-task-selected-outline),
+        0 0 20px 5px var(--planner-task-delayed-glow-soft-color),
+        0 0 30px 10px rgba(183, 28, 28, 0.28),
+        0 2px 8px var(--planner-task-hover-shadow);
+}
+
+.task-bar-multi-phase-wrapper.task-bar-cut {
+    opacity: 0.45;
+}
+
+
+/* Sub-task bars */
+
+.task-bar-sub-task {
+    min-width: 0;
+    cursor: grab;
+}
+
+.task-bar-sub-task-release {
+    border-radius: 0;
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+    border: none;
+}
+
 .task-hover-bubble {
     position: fixed;
     top: 0;

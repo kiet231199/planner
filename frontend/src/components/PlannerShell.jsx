@@ -64,6 +64,7 @@ export default function PlannerShell(props) {
         selectedDayOffDates,
         selectedTask,
         selectedTasks,
+        subTaskEditRequest,
         isDrawerOpen,
         isDayOffDrawerOpen,
         isLoading,
@@ -77,6 +78,8 @@ export default function PlannerShell(props) {
         canCutSelectedTasks,
         canPasteCopiedTasks,
         cutTaskIds,
+        cutSubTaskInfo,
+        selectedSubTasks,
         drawerMode,
         dayOffDrawerMode,
         dayOffInitialValues,
@@ -105,6 +108,7 @@ export default function PlannerShell(props) {
         onRefreshPlanner,
         onRedoTaskChange,
         onResizeTaskDates,
+        onSubTaskSelect,
         onSelectTask,
         onSelectTasks,
         onSelectDayOffDate,
@@ -692,6 +696,8 @@ export default function PlannerShell(props) {
                     dayOffs={dayOffs}
                     projectNames={projectNames}
                     cutTaskIds={cutTaskIds}
+                    cutSubTaskInfo={cutSubTaskInfo}
+                    selectedSubTasks={selectedSubTasks}
                     highlightedTaskId={timelineHighlightedTaskId}
                     isLoading={isLoading}
                     isRowReorderDisabled={isTaskViewFilteredOrSorted}
@@ -710,6 +716,7 @@ export default function PlannerShell(props) {
                     onSelectTask={onSelectTask}
                     onSelectTasks={onSelectTasks}
                     onSelectDayOffDate={onSelectDayOffDate}
+                    onSubTaskSelect={onSubTaskSelect}
                     onTimelineZoom={onTimelineZoom}
                 />
             </Box>
@@ -723,6 +730,7 @@ export default function PlannerShell(props) {
                 mode={drawerMode}
                 task={selectedTask}
                 tasks={selectedTasks}
+                subTaskEditRequest={subTaskEditRequest}
                 onClose={onDrawerClose}
                 onCreateTask={onCreateTask}
                 onSaveAssignees={onSaveAssignees}

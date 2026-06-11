@@ -11,11 +11,71 @@ UNASSIGNED_ASSIGNEE = "Unassigned"
 DAY_OFF_ALL_ASSIGNEES = "All"
 DEFAULT_TASK_LEVEL = "Level 1"
 RELEASE_TASK_TYPE = "Release"
+MULTI_PHASE_TASK_TYPE = "Multi-phase"
 NO_PROJECT_NAME = "..."
 RESERVED_ASSIGNEE_NAMES = {
     UNASSIGNED_ASSIGNEE.casefold(),
     DAY_OFF_ALL_ASSIGNEES.casefold(),
 }
+
+
+def get_sub_task_stop_date(sub_task: "SubTaskCreate") -> date:
+    if sub_task.taskType == RELEASE_TASK_TYPE:
+        return sub_task.startDate
+
+    return sub_task.stopDate
+
+
+def has_sub_task_overlap(sub_tasks: list["SubTaskCreate"]) -> bool:
+    sorted_sub_tasks = sorted(
+        sub_tasks,
+        key=lambda sub_task: (sub_task.startDate, get_sub_task_stop_date(sub_task)),
+    )
+
+    for index, sub_task in enumerate(sorted_sub_tasks[:-1]):
+        next_sub_task = sorted_sub_tasks[index + 1]
+
+        if next_sub_task.startDate <= get_sub_task_stop_date(sub_task):
+            return True
+
+    return False
+
+
+class SubTaskCreate(BaseModel):
+    id: str
+    name: str = Field(min_length=1)
+    taskType: str = Field(min_length=1)
+    startDate: date
+    stopDate: date
+    progressPercent: int = Field(
+        default=MIN_PROGRESS_PERCENT,
+        ge=MIN_PROGRESS_PERCENT,
+        le=MAX_PROGRESS_PERCENT,
+    )
+
+    @field_validator("name", "taskType")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        trimmed_value = value.strip()
+
+        if not trimmed_value:
+            raise ValueError("Field must not be empty.")
+
+        return trimmed_value
+
+    @model_validator(mode="after")
+    def validate_sub_task(self) -> "SubTaskCreate":
+        if self.taskType == RELEASE_TASK_TYPE:
+            self.stopDate = self.startDate
+            self.progressPercent = MAX_PROGRESS_PERCENT
+
+        if self.stopDate < self.startDate:
+            raise ValueError("Stop date must be on or after start date.")
+
+        return self
+
+
+SubTask = SubTaskCreate
 
 
 class TaskCreate(BaseModel):
@@ -33,6 +93,7 @@ class TaskCreate(BaseModel):
         ge=MIN_PROGRESS_PERCENT,
         le=MAX_PROGRESS_PERCENT,
     )
+    subTasks: Optional[list[SubTask]] = None
 
     @field_validator("name", "taskType")
     @classmethod
@@ -73,6 +134,23 @@ class TaskCreate(BaseModel):
             self.taskLevel = DEFAULT_TASK_LEVEL
             self.stopDate = self.startDate
             self.progressPercent = MAX_PROGRESS_PERCENT
+
+        if self.taskType == MULTI_PHASE_TASK_TYPE:
+            self.taskLevel = DEFAULT_TASK_LEVEL
+
+            if self.subTasks:
+                self.subTasks = sorted(
+                    self.subTasks,
+                    key=lambda sub_task: (
+                        sub_task.startDate,
+                        get_sub_task_stop_date(sub_task),
+                    ),
+                )
+
+                if has_sub_task_overlap(self.subTasks):
+                    raise ValueError("Sub-tasks must not overlap.")
+        else:
+            self.subTasks = None
 
         if self.stopDate < self.startDate:
             raise ValueError("Stop date must be on or after start date.")

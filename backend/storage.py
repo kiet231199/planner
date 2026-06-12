@@ -15,6 +15,7 @@ from models import (
     DAY_OFF_ALL_ASSIGNEES,
     DayOff,
     DayOffBulkCreate,
+    Dependency,
     NO_PROJECT_NAME,
     PlannerData,
     ProjectName,
@@ -51,6 +52,10 @@ def list_project_names() -> list[ProjectName]:
     return _read_project_names()
 
 
+def list_dependency() -> list[Dependency]:
+    return _read_dependency()
+
+
 def create_task(task_create: TaskCreate, after_task_id: str | None = None) -> Task:
     tasks = _read_tasks()
     task = Task(id=str(uuid4()), **task_create.model_dump())
@@ -77,7 +82,10 @@ def update_task(task_id: str, task_update: TaskCreate) -> Task:
     return updated_task
 
 
-def replace_tasks(updated_tasks: list[Task]) -> list[Task]:
+def replace_tasks(
+    updated_tasks: list[Task],
+    updated_dependency: list[Dependency] | None = None,
+) -> list[Task]:
     updated_task_ids = [task.id for task in updated_tasks]
 
     if len(set(updated_task_ids)) != len(updated_task_ids):
@@ -86,7 +94,13 @@ def replace_tasks(updated_tasks: list[Task]) -> list[Task]:
             detail="Task list contains duplicate task IDs.",
         )
 
-    _write_tasks(updated_tasks)
+    if updated_dependency is None:
+        updated_dependency = _read_dependency()
+
+    _write_tasks_and_dependency(
+        updated_tasks,
+        _get_existing_task_dependency(updated_dependency, set(updated_task_ids)),
+    )
 
     return updated_tasks
 
@@ -148,6 +162,7 @@ def replace_assignees(assignee_list_update: AssigneeListUpdate) -> PlannerData:
     tasks = _read_tasks()
     day_offs = _read_day_offs()
     project_names = _read_project_names()
+    dependency = _read_dependency()
     assignees = assignee_list_update.assignees
     renamed_assignees = _get_assignee_rename_map(
         assignee_list_update.renamedAssignees,
@@ -170,6 +185,7 @@ def replace_assignees(assignee_list_update: AssigneeListUpdate) -> PlannerData:
         "dayOffs": [_serialize_day_off(day_off) for day_off in updated_day_offs],
         "assignees": [_serialize_assignee(assignee) for assignee in assignees],
         "project_name": [_serialize_project_name(project_name) for project_name in project_names],
+        "dependency": [_serialize_dependency(dependency_item) for dependency_item in dependency],
     })
 
     return PlannerData(
@@ -177,6 +193,7 @@ def replace_assignees(assignee_list_update: AssigneeListUpdate) -> PlannerData:
         dayOffs=updated_day_offs,
         assignees=assignees,
         project_name=project_names,
+        dependency=dependency,
     )
 
 
@@ -184,6 +201,7 @@ def replace_project_names(project_name_list_update: ProjectNameListUpdate) -> Pl
     tasks = _read_tasks()
     day_offs = _read_day_offs()
     assignees = _read_assignees()
+    dependency = _read_dependency()
     project_names = project_name_list_update.project_name
     renamed_projects = _get_project_rename_map(
         project_name_list_update.renamedProjects,
@@ -201,6 +219,7 @@ def replace_project_names(project_name_list_update: ProjectNameListUpdate) -> Pl
         "dayOffs": [_serialize_day_off(day_off) for day_off in day_offs],
         "assignees": [_serialize_assignee(assignee) for assignee in assignees],
         "project_name": [_serialize_project_name(project_name) for project_name in project_names],
+        "dependency": [_serialize_dependency(dependency_item) for dependency_item in dependency],
     })
 
     return PlannerData(
@@ -208,6 +227,7 @@ def replace_project_names(project_name_list_update: ProjectNameListUpdate) -> Pl
         dayOffs=day_offs,
         assignees=assignees,
         project_name=project_names,
+        dependency=dependency,
     )
 
 
@@ -221,7 +241,16 @@ def delete_task(task_id: str) -> None:
             detail="Task not found.",
         )
 
-    _write_tasks(remaining_tasks)
+    remaining_task_ids = {
+        task.id
+        for task in remaining_tasks
+    }
+    remaining_dependency = _get_existing_task_dependency(
+        _read_dependency(),
+        remaining_task_ids,
+    )
+
+    _write_tasks_and_dependency(remaining_tasks, remaining_dependency)
 
 
 def _get_task_index(tasks: list[Task], task_id: str) -> int:
@@ -296,9 +325,35 @@ def _read_project_names() -> list[ProjectName]:
         ) from error
 
 
+def _read_dependency() -> list[Dependency]:
+    payload = _read_data_payload()
+    raw_dependency = _extract_raw_dependency(payload)
+
+    try:
+        dependency = [
+            Dependency.model_validate(raw_dependency_item)
+            for raw_dependency_item in raw_dependency
+        ]
+        _validate_unique_dependency(dependency)
+
+        return dependency
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Task data file contains invalid dependency records.",
+        ) from error
+
+
 def _write_tasks(tasks: list[Task]) -> None:
     payload = _read_data_payload()
     payload["tasks"] = [_serialize_task(task) for task in tasks]
+    _write_data_payload(payload)
+
+
+def _write_tasks_and_dependency(tasks: list[Task], dependency: list[Dependency]) -> None:
+    payload = _read_data_payload()
+    payload["tasks"] = [_serialize_task(task) for task in tasks]
+    payload["dependency"] = [_serialize_dependency(dependency_item) for dependency_item in dependency]
     _write_data_payload(payload)
 
 
@@ -341,6 +396,7 @@ def _write_data_payload(payload: dict[str, Any]) -> None:
         "dayOffs": payload.get("dayOffs", []),
         "assignees": payload.get("assignees", _serialize_assignees(DEFAULT_ASSIGNEES)),
         "project_name": payload.get("project_name", []),
+        "dependency": payload.get("dependency", []),
     }
 
     _write_normalized_data_payload(normalized_payload)
@@ -368,6 +424,7 @@ def _get_default_data_payload() -> dict[str, Any]:
         "dayOffs": [],
         "assignees": _serialize_assignees(DEFAULT_ASSIGNEES),
         "project_name": [],
+        "dependency": [],
     }
 
 
@@ -378,13 +435,15 @@ def _normalize_read_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], bo
             "dayOffs": payload.get("dayOffs", []),
             "assignees": payload.get("assignees", []),
             "project_name": payload.get("project_name", []),
-        }, "project_name" not in payload
+            "dependency": payload.get("dependency", []),
+        }, "project_name" not in payload or "dependency" not in payload
 
     return {
         "tasks": [],
         "dayOffs": payload.get("dayOffs", []),
         "assignees": _serialize_assignees(DEFAULT_ASSIGNEES),
         "project_name": [],
+        "dependency": [],
     }, True
 
 
@@ -448,6 +507,21 @@ def _extract_raw_project_names(payload: Any) -> list[dict[str, Any]]:
     return raw_project_names
 
 
+def _extract_raw_dependency(payload: Any) -> list[dict[str, Any]]:
+    raw_dependency = payload.get("dependency")
+
+    if raw_dependency is None:
+        return []
+
+    if not isinstance(raw_dependency, list):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Task data file must contain a dependency list.",
+        )
+
+    return raw_dependency
+
+
 def _serialize_task(task: Task) -> dict[str, Any]:
     return task.model_dump(mode="json")
 
@@ -466,6 +540,44 @@ def _serialize_assignees(assignees: list[Assignee]) -> list[dict[str, Any]]:
 
 def _serialize_project_name(project_name: ProjectName) -> dict[str, Any]:
     return project_name.model_dump(mode="json")
+
+
+def _serialize_dependency(dependency: Dependency) -> dict[str, Any]:
+    return dependency.model_dump(mode="json")
+
+
+def _validate_unique_dependency(dependency: list[Dependency]) -> None:
+    dependency_ids = [dependency_item.id for dependency_item in dependency]
+
+    if len(set(dependency_ids)) != len(dependency_ids):
+        raise ValueError("Dependency IDs must be unique.")
+
+    dependency_keys = [
+        (
+            dependency_item.fromTaskId,
+            dependency_item.fromSide,
+            dependency_item.toTaskId,
+            dependency_item.toSide,
+        )
+        for dependency_item in dependency
+    ]
+
+    if len(set(dependency_keys)) != len(dependency_keys):
+        raise ValueError("Dependencies must be unique.")
+
+
+def _get_existing_task_dependency(
+    dependency: list[Dependency],
+    task_ids: set[str],
+) -> list[Dependency]:
+    return [
+        dependency_item
+        for dependency_item in dependency
+        if (
+            dependency_item.fromTaskId in task_ids
+            and dependency_item.toTaskId in task_ids
+        )
+    ]
 
 
 def _get_assignee_rename_map(

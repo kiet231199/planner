@@ -59,8 +59,10 @@ export default function PlannerShell(props) {
         dayOffs,
         assignees,
         projectNames,
+        dependency,
         selectedTaskId,
         selectedTaskIds,
+        selectedDependencyIds,
         selectedDayOffDates,
         selectedTask,
         selectedTasks,
@@ -94,7 +96,9 @@ export default function PlannerShell(props) {
         onSaveAssignees,
         onSaveProjectNames,
         onColorModeToggle,
+        onClearDependencySelection,
         onClearSelection,
+        onCreateDependency,
         onCreateTask,
         onCopySelectedTasks,
         onCutSelectedTasks,
@@ -112,6 +116,7 @@ export default function PlannerShell(props) {
         onSelectTask,
         onSelectTasks,
         onSelectDayOffDate,
+        onSelectDependency,
         onUndoTaskChange,
         onUpdateTask,
         onUpdateTasks,
@@ -695,6 +700,7 @@ export default function PlannerShell(props) {
                     tasks={displayedTasks}
                     dayOffs={dayOffs}
                     projectNames={projectNames}
+                    dependency={dependency}
                     cutTaskIds={cutTaskIds}
                     cutSubTaskInfo={cutSubTaskInfo}
                     selectedSubTasks={selectedSubTasks}
@@ -702,11 +708,14 @@ export default function PlannerShell(props) {
                     isLoading={isLoading}
                     isRowReorderDisabled={isTaskViewFilteredOrSorted}
                     selectedDayOffDates={selectedDayOffDates}
+                    selectedDependencyIds={selectedDependencyIds}
                     selectedTaskIds={selectedTaskIds}
                     showTimelineHorizontalGridLines={showTimelineHorizontalGridLines}
                     zoomIndex={zoomIndex}
                     onClearHighlight={handleClearTaskHighlight}
+                    onClearDependencySelection={onClearDependencySelection}
                     onClearSelection={onClearSelection}
+                    onCreateDependency={onCreateDependency}
                     onHighlightTask={handleTaskHighlight}
                     onMoveTasks={onMoveTasks}
                     onOpenTaskEdit={onOpenTaskEdit}
@@ -716,6 +725,7 @@ export default function PlannerShell(props) {
                     onSelectTask={onSelectTask}
                     onSelectTasks={onSelectTasks}
                     onSelectDayOffDate={onSelectDayOffDate}
+                    onSelectDependency={onSelectDependency}
                     onSubTaskSelect={onSubTaskSelect}
                     onTimelineZoom={onTimelineZoom}
                 />

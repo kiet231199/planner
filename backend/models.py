@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -162,8 +162,32 @@ class Task(TaskCreate):
     id: str
 
 
+class Dependency(BaseModel):
+    id: str = Field(min_length=1)
+    fromTaskId: str = Field(min_length=1)
+    fromSide: Literal["left", "right"]
+    toTaskId: str = Field(min_length=1)
+    toSide: Literal["left", "right"]
+
+    @field_validator("id", "fromTaskId", "toTaskId")
+    @classmethod
+    def validate_dependency_text(cls, value: str) -> str:
+        return normalize_text_value(value)
+
+    @model_validator(mode="after")
+    def validate_dependency(self) -> "Dependency":
+        if self.fromTaskId == self.toTaskId:
+            raise ValueError("Dependency tasks must be different.")
+
+        if self.fromSide == self.toSide:
+            raise ValueError("Dependency sides must be different.")
+
+        return self
+
+
 class TaskListUpdate(BaseModel):
     tasks: list[Task]
+    dependency: Optional[list[Dependency]] = None
 
 
 class DayOffCreate(BaseModel):
@@ -378,6 +402,7 @@ class PlannerData(BaseModel):
     dayOffs: list[DayOff]
     assignees: list[Assignee]
     project_name: list[ProjectName]
+    dependency: list[Dependency] = Field(default_factory=list)
 
 
 def normalize_text_value(value: str) -> str:

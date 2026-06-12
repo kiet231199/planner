@@ -21,6 +21,11 @@ export async function listProjectNames() {
 }
 
 
+export async function listDependency() {
+    return sendJsonRequest("/api/dependency");
+}
+
+
 export async function createTask(task) {
     return sendJsonRequest("/api/tasks", {
         method: "POST",
@@ -55,10 +60,16 @@ export async function updateTask(taskId, task) {
 }
 
 
-export async function replaceTasks(tasks) {
+export async function replaceTasks(tasks, dependency = null) {
+    const payload = { tasks };
+
+    if (dependency) {
+        payload.dependency = dependency;
+    }
+
     return sendJsonRequest("/api/tasks/bulk", {
         method: "PUT",
-        body: JSON.stringify({ tasks }),
+        body: JSON.stringify(payload),
     });
 }
 
@@ -87,8 +98,14 @@ export async function replaceProjectNames(projectUpdate) {
 }
 
 
-export function replaceTasksBeforeUnload(tasks) {
-    const body = JSON.stringify({ tasks });
+export function replaceTasksBeforeUnload(tasks, dependency = null) {
+    const payload = { tasks };
+
+    if (dependency) {
+        payload.dependency = dependency;
+    }
+
+    const body = JSON.stringify(payload);
     const beaconPayload = new Blob([body], {
         type: "text/plain;charset=UTF-8",
     });

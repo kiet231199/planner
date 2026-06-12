@@ -6,6 +6,7 @@ import {
     deleteDayOffs,
     listAssignees,
     listDayOffs,
+    listDependency,
     listProjectNames,
     listTasks,
     replaceAssignees,
@@ -44,6 +45,9 @@ const HISTORY_LIMIT = 30;
 const SAVE_ACTION_THRESHOLD = 10;
 const SAVE_INTERVAL_MILLISECONDS = 60 * 1000;
 const CLIENT_TASK_ID_PREFIX = "task";
+const CLIENT_DEPENDENCY_ID_PREFIX = "dependency";
+const DEPENDENCY_SIDE_LEFT = "left";
+const DEPENDENCY_SIDE_RIGHT = "right";
 const BUTTON_LABEL_LINE_HEIGHT = 1.2;
 const LIGHT_COLOR_MODE = "light";
 const DARK_COLOR_MODE = "dark";
@@ -111,7 +115,9 @@ export default function App() {
     const [dayOffs, setDayOffs] = useState([]);
     const [assignees, setAssignees] = useState([]);
     const [projectNames, setProjectNames] = useState([]);
+    const [dependency, setDependency] = useState([]);
     const [selectedTaskIds, setSelectedTaskIds] = useState([]);
+    const [selectedDependencyIds, setSelectedDependencyIds] = useState([]);
     const [selectedDayOffDates, setSelectedDayOffDates] = useState([]);
     const [copiedTasks, setCopiedTasks] = useState([]);
     const [cutTaskIds, setCutTaskIds] = useState([]);
@@ -140,7 +146,9 @@ export default function App() {
     const dayOffsRef = useRef([]);
     const assigneesRef = useRef([]);
     const projectNamesRef = useRef([]);
+    const dependencyRef = useRef([]);
     const selectedTaskIdsRef = useRef([]);
+    const selectedDependencyIdsRef = useRef([]);
     const selectedDayOffDatesRef = useRef([]);
     const copiedTasksRef = useRef([]);
     const cutTaskIdsRef = useRef([]);
@@ -189,9 +197,17 @@ export default function App() {
         projectNamesRef.current = projectNames;
     }, [projectNames]);
 
+    useEffect(function keepLatestDependencyReference() {
+        dependencyRef.current = dependency;
+    }, [dependency]);
+
     useEffect(function keepLatestSelectionReference() {
         selectedTaskIdsRef.current = selectedTaskIds;
     }, [selectedTaskIds]);
+
+    useEffect(function keepLatestDependencySelectionReference() {
+        selectedDependencyIdsRef.current = selectedDependencyIds;
+    }, [selectedDependencyIds]);
 
     useEffect(function keepLatestDayOffSelectionReference() {
         selectedDayOffDatesRef.current = selectedDayOffDates;
@@ -303,6 +319,7 @@ export default function App() {
                 || isDayOffDrawerOpen
             );
             const currentSelectedTaskIds = selectedTaskIdsRef.current;
+            const currentSelectedDependencyIds = selectedDependencyIdsRef.current;
             const currentCopiedTasks = copiedTasksRef.current;
             const currentCutTaskIds = cutTaskIdsRef.current;
             const currentTaskBufferMode = taskBufferModeRef.current;
@@ -389,6 +406,12 @@ export default function App() {
                 return;
             }
 
+            if (shouldDeleteSelectedDependency(event, isAnyDrawerOpen, currentSelectedDependencyIds)) {
+                event.preventDefault();
+                handleDeleteSelectedDependency();
+                return;
+            }
+
             if (!shouldDeleteSelectedTasks(event, isAnyDrawerOpen, currentSelectedTaskIds)) {
                 return;
             }
@@ -427,7 +450,7 @@ export default function App() {
                 return;
             }
 
-            replaceTasksBeforeUnload(tasksRef.current);
+            replaceTasksBeforeUnload(tasksRef.current, dependencyRef.current);
         }
 
         window.addEventListener("beforeunload", handleBeforeUnload);
@@ -446,11 +469,13 @@ export default function App() {
                 dayOffsResult,
                 assigneesResult,
                 projectNamesResult,
+                dependencyResult,
             ] = await Promise.allSettled([
                 listTasks(),
                 listDayOffs(),
                 listAssignees(),
                 listProjectNames(),
+                listDependency(),
             ]);
 
             if (tasksResult.status === "rejected") {
@@ -494,6 +519,18 @@ export default function App() {
                 projectNamesRef.current = [];
                 setProjectNames([]);
                 setErrorMessage(getProjectNamesLoadErrorMessage(projectNamesResult.reason));
+            }
+
+            if (dependencyResult.status === "fulfilled") {
+                const loadedDependency = cloneDependency(dependencyResult.value);
+
+                dependencyRef.current = loadedDependency;
+                setDependency(loadedDependency);
+                clearMissingDependencySelection(loadedDependency);
+            } else {
+                dependencyRef.current = [];
+                setDependency([]);
+                setErrorMessage(getDependencyLoadErrorMessage(dependencyResult.reason));
             }
         } catch (error) {
             setErrorMessage(error.message);
@@ -1356,7 +1393,9 @@ export default function App() {
         applyPlannerSnapshot(
             historyEntry.beforeTasks,
             historyEntry.beforeDayOffs,
+            historyEntry.beforeDependency,
             historyEntry.selectedTaskIdsBefore,
+            historyEntry.selectedDependencyIdsBefore,
             historyEntry.selectedDayOffDatesBefore,
         );
 
@@ -1376,7 +1415,9 @@ export default function App() {
         applyPlannerSnapshot(
             historyEntry.afterTasks,
             historyEntry.afterDayOffs,
+            historyEntry.afterDependency,
             historyEntry.selectedTaskIdsAfter,
+            historyEntry.selectedDependencyIdsAfter,
             historyEntry.selectedDayOffDatesAfter,
         );
 
@@ -1391,9 +1432,18 @@ export default function App() {
         selectedTaskIdsAfter,
         label,
     ) {
+        const beforeDependency = dependencyRef.current;
+        const afterDependency = getExistingTaskDependency(afterTasks, beforeDependency);
+        const selectedDependencyIdsAfter = getExistingDependencyIds(
+            selectedDependencyIdsRef.current,
+            afterDependency,
+        );
+
         if (
             hasSameTaskList(beforeTasks, afterTasks)
             && hasSameTaskSelection(selectedTaskIdsBefore, selectedTaskIdsAfter)
+            && hasSameDependencyList(beforeDependency, afterDependency)
+            && hasSameStringList(selectedDependencyIdsRef.current, selectedDependencyIdsAfter)
         ) {
             return;
         }
@@ -1403,8 +1453,12 @@ export default function App() {
             afterTasks: cloneTasks(afterTasks),
             beforeDayOffs: cloneDayOffs(dayOffsRef.current),
             afterDayOffs: cloneDayOffs(dayOffsRef.current),
+            beforeDependency: cloneDependency(beforeDependency),
+            afterDependency: cloneDependency(afterDependency),
             selectedTaskIdsBefore: [...selectedTaskIdsBefore],
             selectedTaskIdsAfter: [...selectedTaskIdsAfter],
+            selectedDependencyIdsBefore: [...selectedDependencyIdsRef.current],
+            selectedDependencyIdsAfter: [...selectedDependencyIdsAfter],
             selectedDayOffDatesBefore: [...selectedDayOffDatesRef.current],
             selectedDayOffDatesAfter: [...selectedDayOffDatesRef.current],
             label,
@@ -1415,7 +1469,9 @@ export default function App() {
         applyPlannerSnapshot(
             afterTasks,
             dayOffsRef.current,
+            afterDependency,
             selectedTaskIdsAfter,
+            selectedDependencyIdsAfter,
             selectedDayOffDatesRef.current,
         );
         markTasksDirty();
@@ -1441,8 +1497,12 @@ export default function App() {
             afterTasks: cloneTasks(tasksRef.current),
             beforeDayOffs: cloneDayOffs(beforeDayOffs),
             afterDayOffs: cloneDayOffs(afterDayOffs),
+            beforeDependency: cloneDependency(dependencyRef.current),
+            afterDependency: cloneDependency(dependencyRef.current),
             selectedTaskIdsBefore: [...selectedTaskIdsRef.current],
             selectedTaskIdsAfter: [...selectedTaskIdsRef.current],
+            selectedDependencyIdsBefore: [...selectedDependencyIdsRef.current],
+            selectedDependencyIdsAfter: [...selectedDependencyIdsRef.current],
             selectedDayOffDatesBefore: [...selectedDayOffDatesBefore],
             selectedDayOffDatesAfter: [...selectedDayOffDatesAfter],
             label,
@@ -1453,30 +1513,84 @@ export default function App() {
         applyPlannerSnapshot(
             tasksRef.current,
             afterDayOffs,
+            dependencyRef.current,
             selectedTaskIdsRef.current,
+            selectedDependencyIdsRef.current,
             selectedDayOffDatesAfter,
         );
+        refreshHistoryState();
+    }
+
+    function commitDependencyChange(
+        beforeDependency,
+        afterDependency,
+        selectedDependencyIdsBefore,
+        selectedDependencyIdsAfter,
+        label,
+    ) {
+        if (
+            hasSameDependencyList(beforeDependency, afterDependency)
+            && hasSameStringList(selectedDependencyIdsBefore, selectedDependencyIdsAfter)
+        ) {
+            return;
+        }
+
+        const historyEntry = {
+            beforeTasks: cloneTasks(tasksRef.current),
+            afterTasks: cloneTasks(tasksRef.current),
+            beforeDayOffs: cloneDayOffs(dayOffsRef.current),
+            afterDayOffs: cloneDayOffs(dayOffsRef.current),
+            beforeDependency: cloneDependency(beforeDependency),
+            afterDependency: cloneDependency(afterDependency),
+            selectedTaskIdsBefore: [...selectedTaskIdsRef.current],
+            selectedTaskIdsAfter: [...selectedTaskIdsRef.current],
+            selectedDependencyIdsBefore: [...selectedDependencyIdsBefore],
+            selectedDependencyIdsAfter: [...selectedDependencyIdsAfter],
+            selectedDayOffDatesBefore: [...selectedDayOffDatesRef.current],
+            selectedDayOffDatesAfter: [...selectedDayOffDatesRef.current],
+            label,
+        };
+
+        pushLimitedHistoryEntry(undoStackRef.current, historyEntry);
+        redoStackRef.current = [];
+        applyPlannerSnapshot(
+            tasksRef.current,
+            dayOffsRef.current,
+            afterDependency,
+            selectedTaskIdsRef.current,
+            selectedDependencyIdsAfter,
+            selectedDayOffDatesRef.current,
+        );
+        markTasksDirty();
         refreshHistoryState();
     }
 
     function applyPlannerSnapshot(
         nextTasks,
         nextDayOffs,
+        nextDependency,
         nextSelectedTaskIds,
+        nextSelectedDependencyIds,
         nextSelectedDayOffDates,
     ) {
         const clonedTasks = cloneTasks(nextTasks);
         const clonedDayOffs = cloneDayOffs(nextDayOffs);
+        const clonedDependency = cloneDependency(nextDependency);
         const clonedSelectedTaskIds = [...nextSelectedTaskIds];
+        const clonedSelectedDependencyIds = [...nextSelectedDependencyIds];
         const clonedSelectedDayOffDates = [...nextSelectedDayOffDates];
 
         tasksRef.current = clonedTasks;
         dayOffsRef.current = clonedDayOffs;
+        dependencyRef.current = clonedDependency;
         selectedTaskIdsRef.current = clonedSelectedTaskIds;
+        selectedDependencyIdsRef.current = clonedSelectedDependencyIds;
         selectedDayOffDatesRef.current = clonedSelectedDayOffDates;
         setTasks(clonedTasks);
         setDayOffs(clonedDayOffs);
+        setDependency(clonedDependency);
         setSelectedTaskIds(clonedSelectedTaskIds);
+        setSelectedDependencyIds(clonedSelectedDependencyIds);
         setSelectedDayOffDates(clonedSelectedDayOffDates);
     }
 
@@ -1485,11 +1599,13 @@ export default function App() {
         const nextDayOffs = cloneDayOffs(plannerData.dayOffs);
         const nextAssignees = cloneAssignees(plannerData.assignees);
         const nextProjectNames = cloneProjectNames(plannerData.project_name || []);
+        const nextDependency = cloneDependency(plannerData.dependency || []);
 
         tasksRef.current = nextTasks;
         dayOffsRef.current = nextDayOffs;
         assigneesRef.current = nextAssignees;
         projectNamesRef.current = nextProjectNames;
+        dependencyRef.current = nextDependency;
         undoStackRef.current = [];
         redoStackRef.current = [];
         isDirtyRef.current = false;
@@ -1498,7 +1614,9 @@ export default function App() {
         setDayOffs(nextDayOffs);
         setAssignees(nextAssignees);
         setProjectNames(nextProjectNames);
+        setDependency(nextDependency);
         clearMissingSelection(nextTasks);
+        clearMissingDependencySelection(nextDependency);
         refreshHistoryState();
     }
 
@@ -1517,12 +1635,16 @@ export default function App() {
         }
 
         const tasksToSave = cloneTasks(tasksRef.current);
+        const dependencyToSave = cloneDependency(dependencyRef.current);
         isSavingRef.current = true;
 
         try {
-            await replaceTasks(tasksToSave);
+            await replaceTasks(tasksToSave, dependencyToSave);
 
-            if (hasSameTaskList(tasksRef.current, tasksToSave)) {
+            if (
+                hasSameTaskList(tasksRef.current, tasksToSave)
+                && hasSameDependencyList(dependencyRef.current, dependencyToSave)
+            ) {
                 isDirtyRef.current = false;
                 pendingActionCountRef.current = 0;
             }
@@ -1534,7 +1656,10 @@ export default function App() {
     }
 
     async function persistHistoryUndoRedoChange(historyEntry, snapshotKey) {
-        if (!hasSameTaskList(historyEntry.beforeTasks, historyEntry.afterTasks)) {
+        if (
+            !hasSameTaskList(historyEntry.beforeTasks, historyEntry.afterTasks)
+            || !hasSameDependencyList(historyEntry.beforeDependency, historyEntry.afterDependency)
+        ) {
             markTasksDirty();
         }
 
@@ -1589,6 +1714,7 @@ export default function App() {
 
         selectedTaskIdsRef.current = nextTaskIds;
         setSelectedTaskIds(nextTaskIds);
+        clearDependencySelection();
         clearSubTaskSelectionForTaskSelection(nextTaskIds, selectionMode);
     }
 
@@ -1604,7 +1730,99 @@ export default function App() {
         lastSelectedTaskIdRef.current = getLastSelectedTaskId(nextTaskIds);
         selectedTaskIdsRef.current = nextTaskIds;
         setSelectedTaskIds(nextTaskIds);
+        clearDependencySelection();
         clearSubTaskSelectionForTaskSelection(nextTaskIds, selectionMode);
+    }
+
+    function handleCreateDependency(fromEndpoint, toEndpoint) {
+        const beforeDependency = dependencyRef.current;
+        const normalizedEndpoints = getRightToLeftDependencyEndpoints(
+            fromEndpoint,
+            toEndpoint,
+        );
+
+        if (
+            !normalizedEndpoints
+            || !isValidNewDependency(
+                normalizedEndpoints.fromEndpoint,
+                normalizedEndpoints.toEndpoint,
+                beforeDependency,
+            )
+        ) {
+            return false;
+        }
+
+        const createdDependency = {
+            id: createClientDependencyId(),
+            fromTaskId: normalizedEndpoints.fromEndpoint.taskId,
+            fromSide: normalizedEndpoints.fromEndpoint.side,
+            toTaskId: normalizedEndpoints.toEndpoint.taskId,
+            toSide: normalizedEndpoints.toEndpoint.side,
+        };
+        const afterDependency = [
+            ...beforeDependency,
+            createdDependency,
+        ];
+
+        commitDependencyChange(
+            beforeDependency,
+            afterDependency,
+            selectedDependencyIdsRef.current,
+            [createdDependency.id],
+            "Add dependency",
+        );
+
+        return true;
+    }
+
+    function handleSelectDependency(dependencyId, isToggleSelection) {
+        const nextSelectedDependencyIds = isToggleSelection
+            ? toggleSelectedDependencyId(selectedDependencyIdsRef.current, dependencyId)
+            : [dependencyId];
+
+        selectedDependencyIdsRef.current = nextSelectedDependencyIds;
+        setSelectedDependencyIds(nextSelectedDependencyIds);
+        lastSelectedTaskIdRef.current = null;
+        selectedTaskIdsRef.current = [];
+        setSelectedTaskIds([]);
+        selectedDayOffDatesRef.current = [];
+        setSelectedDayOffDates([]);
+        clearSubTaskSelection();
+    }
+
+    function handleClearDependencySelection() {
+        clearDependencySelection();
+    }
+
+    function handleDeleteSelectedDependency() {
+        const beforeDependency = dependencyRef.current;
+        const beforeSelectedDependencyIds = selectedDependencyIdsRef.current;
+
+        if (beforeSelectedDependencyIds.length === 0) {
+            return;
+        }
+
+        const selectedDependencyIdSet = new Set(beforeSelectedDependencyIds);
+        const afterDependency = beforeDependency.filter(function keepDependency(dependencyItem) {
+            return !selectedDependencyIdSet.has(dependencyItem.id);
+        });
+
+        commitDependencyChange(
+            beforeDependency,
+            afterDependency,
+            beforeSelectedDependencyIds,
+            [],
+            "Delete dependency",
+        );
+    }
+
+    function clearDependencySelection() {
+        if (selectedDependencyIdsRef.current.length === 0) {
+            return;
+        }
+
+        selectedDependencyIdsRef.current = [];
+        setSelectedDependencyIds([]);
     }
 
     function clearSubTaskSelectionForTaskSelection(taskIds, selectionMode) {
@@ -1702,6 +1920,25 @@ export default function App() {
         });
     }
 
+    function clearMissingDependencySelection(loadedDependency) {
+        setSelectedDependencyIds(function clearSelection(currentSelectedDependencyIds) {
+            const loadedDependencyIds = new Set(loadedDependency.map(
+                function mapDependencyId(dependencyItem) {
+                    return dependencyItem.id;
+                },
+            ));
+            const nextSelectedDependencyIds = currentSelectedDependencyIds.filter(
+                function keepDependencyId(dependencyId) {
+                    return loadedDependencyIds.has(dependencyId);
+                },
+            );
+
+            selectedDependencyIdsRef.current = nextSelectedDependencyIds;
+
+            return nextSelectedDependencyIds;
+        });
+    }
+
     function closeErrorMessage() {
         setErrorMessage("");
     }
@@ -1728,8 +1965,10 @@ export default function App() {
                     dayOffs={dayOffs}
                     assignees={assignees}
                     projectNames={projectNames}
+                    dependency={dependency}
                     selectedTaskId={selectedTaskId}
                     selectedTaskIds={selectedTaskIds}
+                    selectedDependencyIds={selectedDependencyIds}
                     selectedDayOffDates={selectedDayOffDates}
                     isDrawerOpen={isDrawerOpen}
                     isDayOffDrawerOpen={isDayOffDrawerOpen}
@@ -1786,14 +2025,19 @@ export default function App() {
                         lastSelectedTaskIdRef.current = null;
                         lastSelectedDayOffDateRef.current = null;
                         selectedTaskIdsRef.current = [];
+                        selectedDependencyIdsRef.current = [];
                         selectedDayOffDatesRef.current = [];
                         selectedSubTaskRef.current = null;
                         selectedSubTasksRef.current = [];
                         setSelectedTaskIds([]);
+                        setSelectedDependencyIds([]);
                         setSelectedDayOffDates([]);
                         setSelectedSubTask(null);
                         setSelectedSubTasks([]);
                     }}
+                    onClearDependencySelection={handleClearDependencySelection}
+                    onCreateDependency={handleCreateDependency}
+                    onSelectDependency={handleSelectDependency}
                     onSelectTask={handleSelectTask}
                     onSelectTasks={handleSelectTasks}
                     onSelectDayOffDate={handleSelectDayOffDate}
@@ -2147,6 +2391,19 @@ function shouldDeleteSelectedTasks(event, isAnyDrawerOpen, selectedTaskIds) {
 }
 
 
+function shouldDeleteSelectedDependency(event, isAnyDrawerOpen, selectedDependencyIds) {
+    if (event.key !== "Delete") {
+        return false;
+    }
+
+    if (event.repeat || isAnyDrawerOpen || selectedDependencyIds.length === 0) {
+        return false;
+    }
+
+    return !isEditableTarget(event.target);
+}
+
+
 function isEditableTarget(target) {
     if (!(target instanceof Element)) {
         return false;
@@ -2162,6 +2419,15 @@ function createClientTaskId() {
     }
 
     return `${CLIENT_TASK_ID_PREFIX}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+
+function createClientDependencyId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return window.crypto.randomUUID();
+    }
+
+    return `${CLIENT_DEPENDENCY_ID_PREFIX}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 
@@ -2227,6 +2493,44 @@ function cloneProjectNames(projectNames) {
 }
 
 
+function cloneDependency(dependency) {
+    return dependency
+        .map(function cloneDependencyItem(dependencyItem) {
+            return getRightToLeftDependencyItem(dependencyItem);
+        })
+        .filter(function keepValidDependencyItem(dependencyItem) {
+            return Boolean(dependencyItem);
+        });
+}
+
+
+function getRightToLeftDependencyItem(dependencyItem) {
+    if (
+        dependencyItem.fromSide === DEPENDENCY_SIDE_RIGHT
+        && dependencyItem.toSide === DEPENDENCY_SIDE_LEFT
+    ) {
+        return {
+            ...dependencyItem,
+        };
+    }
+
+    if (
+        dependencyItem.fromSide === DEPENDENCY_SIDE_LEFT
+        && dependencyItem.toSide === DEPENDENCY_SIDE_RIGHT
+    ) {
+        return {
+            ...dependencyItem,
+            fromTaskId: dependencyItem.toTaskId,
+            fromSide: DEPENDENCY_SIDE_RIGHT,
+            toTaskId: dependencyItem.fromTaskId,
+            toSide: DEPENDENCY_SIDE_LEFT,
+        };
+    }
+
+    return null;
+}
+
+
 function hasSameTaskSelection(firstSelectedTaskIds, secondSelectedTaskIds) {
     if (firstSelectedTaskIds.length !== secondSelectedTaskIds.length) {
         return false;
@@ -2246,6 +2550,145 @@ function hasSameStringList(firstValues, secondValues) {
     return firstValues.every(function matchValue(value, index) {
         return value === secondValues[index];
     });
+}
+
+
+function hasSameDependencyList(firstDependency, secondDependency) {
+    if (firstDependency.length !== secondDependency.length) {
+        return false;
+    }
+
+    return firstDependency.every(function matchDependency(firstDependencyItem, index) {
+        return hasSameDependencyItem(firstDependencyItem, secondDependency[index]);
+    });
+}
+
+
+function hasSameDependencyItem(firstDependencyItem, secondDependencyItem) {
+    if (!secondDependencyItem) {
+        return false;
+    }
+
+    return (
+        firstDependencyItem.id === secondDependencyItem.id
+        && firstDependencyItem.fromTaskId === secondDependencyItem.fromTaskId
+        && firstDependencyItem.fromSide === secondDependencyItem.fromSide
+        && firstDependencyItem.toTaskId === secondDependencyItem.toTaskId
+        && firstDependencyItem.toSide === secondDependencyItem.toSide
+    );
+}
+
+
+function isValidNewDependency(fromEndpoint, toEndpoint, dependency) {
+    if (!fromEndpoint || !toEndpoint) {
+        return false;
+    }
+
+    if (fromEndpoint.taskId === toEndpoint.taskId) {
+        return false;
+    }
+
+    return !dependency.some(function matchExistingDependency(dependencyItem) {
+        return hasSameRightToLeftDependencyEndpoints(
+            dependencyItem,
+            fromEndpoint,
+            toEndpoint,
+        );
+    });
+}
+
+
+function getRightToLeftDependencyEndpoints(fromEndpoint, toEndpoint) {
+    if (!fromEndpoint || !toEndpoint) {
+        return null;
+    }
+
+    const startEndpoint = getDependencyEndpointBySide(
+        fromEndpoint,
+        toEndpoint,
+        DEPENDENCY_SIDE_RIGHT,
+    );
+    const targetEndpoint = getDependencyEndpointBySide(
+        fromEndpoint,
+        toEndpoint,
+        DEPENDENCY_SIDE_LEFT,
+    );
+
+    if (!startEndpoint || !targetEndpoint) {
+        return null;
+    }
+
+    return {
+        fromEndpoint: {
+            taskId: startEndpoint.taskId,
+            side: DEPENDENCY_SIDE_RIGHT,
+        },
+        toEndpoint: {
+            taskId: targetEndpoint.taskId,
+            side: DEPENDENCY_SIDE_LEFT,
+        },
+    };
+}
+
+
+function getDependencyEndpointBySide(firstEndpoint, secondEndpoint, side) {
+    if (firstEndpoint.side === side) {
+        return firstEndpoint;
+    }
+
+    if (secondEndpoint.side === side) {
+        return secondEndpoint;
+    }
+
+    return null;
+}
+
+
+function hasSameRightToLeftDependencyEndpoints(
+    dependencyItem,
+    fromEndpoint,
+    toEndpoint,
+) {
+    return (
+        dependencyItem.fromTaskId === fromEndpoint.taskId
+        && dependencyItem.toTaskId === toEndpoint.taskId
+    );
+}
+
+
+function getExistingTaskDependency(tasks, dependency) {
+    const taskIds = new Set(tasks.map(function mapTaskId(task) {
+        return task.id;
+    }));
+
+    return dependency.filter(function keepExistingDependency(dependencyItem) {
+        return (
+            taskIds.has(dependencyItem.fromTaskId)
+            && taskIds.has(dependencyItem.toTaskId)
+        );
+    });
+}
+
+
+function getExistingDependencyIds(selectedDependencyIds, dependency) {
+    const dependencyIds = new Set(dependency.map(function mapDependencyId(dependencyItem) {
+        return dependencyItem.id;
+    }));
+
+    return selectedDependencyIds.filter(function keepSelectedDependencyId(dependencyId) {
+        return dependencyIds.has(dependencyId);
+    });
+}
+
+
+function toggleSelectedDependencyId(selectedDependencyIds, dependencyId) {
+    if (selectedDependencyIds.includes(dependencyId)) {
+        return selectedDependencyIds.filter(function keepDependencyId(selectedDependencyId) {
+            return selectedDependencyId !== dependencyId;
+        });
+    }
+
+    return [...selectedDependencyIds, dependencyId];
 }
 
 
@@ -3071,4 +3514,13 @@ function getProjectNamesLoadErrorMessage(error) {
     }
 
     return "Projects could not be loaded.";
+}
+
+
+function getDependencyLoadErrorMessage(error) {
+    if (error && error.message) {
+        return `Dependencies could not be loaded. ${error.message}`;
+    }
+
+    return "Dependencies could not be loaded.";
 }

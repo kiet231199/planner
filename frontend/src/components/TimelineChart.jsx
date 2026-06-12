@@ -33,6 +33,8 @@ const TIMELINE_HEADER_OVERSCAN_PIXELS = 720;
 const TIMELINE_VISIBLE_RANGE_STEP_PIXELS = 240;
 const START_RESIZE_EDGE = "start";
 const STOP_RESIZE_EDGE = "stop";
+const DEPENDENCY_SIDE_LEFT = "left";
+const DEPENDENCY_SIDE_RIGHT = "right";
 const TASK_DRAG_THRESHOLD_PIXELS = 4;
 const TASK_DRAG_TYPE_MOVE = "task-move";
 const TASK_DRAG_TYPE_RESIZE = "task-resize";
@@ -55,11 +57,22 @@ const ZOOM_OUT_DIRECTION = -10;
 const TASK_BAR_HORIZONTAL_INSET_PIXELS = 4;
 const TASK_BAR_VERTICAL_INSET_PIXELS = 6;
 const TASK_BAR_HEIGHT_PIXELS = 26;
+const MULTI_TASK_WRAPPER_HORIZONTAL_OUTSET_PIXELS = 3;
+const MULTI_TASK_WRAPPER_VERTICAL_OUTSET_PIXELS = 2;
+const RELEASE_TASK_BAR_SIZE_PIXELS = TASK_BAR_HEIGHT_PIXELS;
+const RELEASE_TASK_DIAMOND_SIDE_PIXELS = 22;
+const RELEASE_TASK_DIAMOND_VISUAL_SIZE_PIXELS = (
+    RELEASE_TASK_DIAMOND_SIDE_PIXELS * Math.SQRT2
+);
 const MIN_TASK_BAR_DISPLAY_WIDTH_PIXELS = 20;
 const MIN_TASK_BAR_RESIZE_WIDTH_PIXELS = 36;
 const TASK_BAR_RESIZE_HANDLE_WIDTH_PIXELS = 10;
 const TASK_BAR_LABEL_HORIZONTAL_PADDING_PIXELS = 8;
 const TASK_BAR_LABEL_FONT = "700 13.76px Roboto, Arial, sans-serif";
+const DEPENDENCY_PREVIEW_ID = "dependency-preview";
+const DEPENDENCY_ARROW_MARKER_ID = "dependency-arrow-marker";
+const DEPENDENCY_PREVIEW_ARROW_MARKER_ID = "dependency-preview-arrow-marker";
+const DEPENDENCY_ADJACENT_CELL_OFFSET_PIXELS = 20;
 const EVENT_BAR_HEIGHT_PIXELS = 88;
 const EVENT_BAR_VIEWPORT_INSET_PIXELS = 16;
 const EVENT_BAR_VERTICAL_OFFSET_PIXELS = 12;
@@ -112,6 +125,7 @@ export default function TimelineChart(props) {
         panelRef: externalPanelRef,
         tasks,
         dayOffs = [],
+        dependency = [],
         projectNames = [],
         cutTaskIds = [],
         cutSubTaskInfo = null,
@@ -120,11 +134,14 @@ export default function TimelineChart(props) {
         isLoading,
         isRowReorderDisabled = false,
         selectedDayOffDates = [],
+        selectedDependencyIds = [],
         selectedTaskIds,
         showTimelineHorizontalGridLines = true,
         zoomIndex,
         onClearHighlight,
+        onClearDependencySelection,
         onClearSelection,
+        onCreateDependency,
         onHighlightTask,
         onMoveTasks,
         onOpenDayOffEdit,
@@ -134,6 +151,7 @@ export default function TimelineChart(props) {
         onSelectTask,
         onSelectTasks,
         onSelectDayOffDate,
+        onSelectDependency,
         onSubTaskSelect,
         onTimelineZoom,
     } = props;
@@ -144,10 +162,13 @@ export default function TimelineChart(props) {
     const metricsRef = useRef(null);
     const tasksRef = useRef(tasks);
     const onClearHighlightRef = useRef(onClearHighlight);
+    const onClearDependencySelectionRef = useRef(onClearDependencySelection);
     const onClearSelectionRef = useRef(onClearSelection);
+    const onCreateDependencyRef = useRef(onCreateDependency);
     const onMoveTasksRef = useRef(onMoveTasks);
     const onResizeTaskDatesRef = useRef(onResizeTaskDates);
     const onSelectDayOffDateRef = useRef(onSelectDayOffDate);
+    const onSelectDependencyRef = useRef(onSelectDependency);
     const onSelectTaskRef = useRef(onSelectTask);
     const onSelectTasksRef = useRef(onSelectTasks);
     const onSubTaskSelectRef = useRef(onSubTaskSelect);
@@ -163,8 +184,10 @@ export default function TimelineChart(props) {
     const taskDragFrameIdRef = useRef(null);
     const timelinePanFrameIdRef = useRef(null);
     const timelineZoomFrameIdRef = useRef(null);
+    const timelineBarsRef = useRef(null);
     const taskBarElementsRef = useRef(new Map());
     const subTaskBarElementsRef = useRef(new Map());
+    const dependencyPreviewRef = useRef(null);
     const taskDragPreviewTaskIdsRef = useRef([]);
     const taskHoverBubbleRef = useRef(null);
     const taskHoverBubbleTaskIdRef = useRef(null);
@@ -175,6 +198,9 @@ export default function TimelineChart(props) {
     const [panelHeight, setPanelHeight] = useState(0);
     const [selectionRectangle, setSelectionRectangle] = useState(null);
     const [taskDragPreview, setTaskDragPreview] = useState(null);
+    const [dependencyPreview, setDependencyPreview] = useState(null);
+    const [dependencyLayouts, setDependencyLayouts] = useState([]);
+    const [activeMultiTaskHandleTaskId, setActiveMultiTaskHandleTaskId] = useState(null);
     const [taskHoverBubble, setTaskHoverBubble] = useState(null);
     const [eventBarFixedLayout, setEventBarFixedLayout] = useState(
         INITIAL_FIXED_EVENT_BAR_LAYOUT,
@@ -258,6 +284,7 @@ export default function TimelineChart(props) {
     }, [metrics, projectColorMap, tasks]);
     metricsRef.current = metrics;
     tasksRef.current = tasks;
+    dependencyPreviewRef.current = dependencyPreview;
 
     const setTimelinePanelElement = useCallback(function setTimelinePanelElement(panel) {
         timelinePanelRef.current = panel;
@@ -279,17 +306,29 @@ export default function TimelineChart(props) {
 
     useEffect(function keepTimelineClearHandlersCurrent() {
         onClearHighlightRef.current = onClearHighlight;
+        onClearDependencySelectionRef.current = onClearDependencySelection;
         onClearSelectionRef.current = onClearSelection;
-    }, [onClearHighlight, onClearSelection]);
+    }, [onClearDependencySelection, onClearHighlight, onClearSelection]);
 
     useEffect(function keepTaskDragHandlersCurrent() {
+        onCreateDependencyRef.current = onCreateDependency;
         onMoveTasksRef.current = onMoveTasks;
         onResizeTaskDatesRef.current = onResizeTaskDates;
         onSelectDayOffDateRef.current = onSelectDayOffDate;
+        onSelectDependencyRef.current = onSelectDependency;
         onSelectTaskRef.current = onSelectTask;
         onSelectTasksRef.current = onSelectTasks;
         onSubTaskSelectRef.current = onSubTaskSelect;
-    }, [onMoveTasks, onResizeTaskDates, onSelectDayOffDate, onSelectTask, onSelectTasks, onSubTaskSelect]);
+    }, [
+        onCreateDependency,
+        onMoveTasks,
+        onResizeTaskDates,
+        onSelectDayOffDate,
+        onSelectDependency,
+        onSelectTask,
+        onSelectTasks,
+        onSubTaskSelect,
+    ]);
 
     useEffect(function clearPendingTimelineWorkOnUnmount() {
         return function clearPendingTimelineWork() {
@@ -304,6 +343,24 @@ export default function TimelineChart(props) {
             subTaskBarElementsRef.current.clear();
         };
     }, []);
+
+    useLayoutEffect(function keepDependencyLayoutsSynced() {
+        setDependencyLayouts(function updateCurrentDependencyLayouts(currentDependencyLayouts) {
+            const nextDependencyLayouts = getDependencyLayouts(
+                dependency,
+                selectedDependencyIds,
+                taskBarElementsRef.current,
+                timelineBarsRef.current,
+                metrics.rowHeight,
+            );
+
+            if (hasSameDependencyLayouts(currentDependencyLayouts, nextDependencyLayouts)) {
+                return currentDependencyLayouts;
+            }
+
+            return nextDependencyLayouts;
+        });
+    });
 
     useLayoutEffect(function keepTaskHoverBubblePositionSynced() {
         applyStoredTaskHoverBubblePosition();
@@ -770,6 +827,15 @@ export default function TimelineChart(props) {
         function handleMouseMove(event) {
             const dragState = dragStateRef.current;
 
+            if (dependencyPreviewRef.current) {
+                if (dragState && isTimelinePanDrag(dragState)) {
+                    scheduleTimelinePan(dragState, event);
+                }
+
+                updateDependencyPreviewPointer(event);
+                return;
+            }
+
             if (!dragState) {
                 return;
             }
@@ -795,6 +861,18 @@ export default function TimelineChart(props) {
         }
 
         function handleMouseUp(event) {
+            if (dependencyPreviewRef.current) {
+                const dragState = dragStateRef.current;
+
+                if (dragState && isTimelinePanDrag(dragState)) {
+                    flushTimelinePanFrame(dragState);
+                    dragStateRef.current = null;
+                    setTimelinePanelDragging(dragState.panel, false);
+                }
+
+                return;
+            }
+
             const dragState = dragStateRef.current;
 
             if (!dragState) {
@@ -869,6 +947,76 @@ export default function TimelineChart(props) {
         };
     }, []);
 
+    function handleDependencyHandleMouseDown(event, task, side) {
+        if (event.button !== LEFT_MOUSE_BUTTON) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        hideTaskHoverBubble();
+
+        const currentPreview = dependencyPreviewRef.current;
+        const endpoint = {
+            taskId: task.id,
+            side,
+        };
+        const anchorPoint = getTaskDependencyAnchorPoint(
+            task.id,
+            side,
+            taskBarElementsRef.current,
+            timelineBarsRef.current,
+            metricsRef.current.rowHeight,
+        );
+
+        if (!anchorPoint) {
+            return;
+        }
+
+        if (!currentPreview) {
+            onClearHighlightRef.current();
+            onClearSelectionRef.current();
+            onClearDependencySelectionRef.current();
+            setDependencyPreview({
+                id: DEPENDENCY_PREVIEW_ID,
+                fromEndpoint: endpoint,
+                fromPoint: anchorPoint,
+                toPoint: getTimelineBodyPointerPoint(
+                    event,
+                    timelineBarsRef.current,
+                    metricsRef.current.rowHeight,
+                ),
+            });
+            return;
+        }
+
+        onCreateDependencyRef.current(currentPreview.fromEndpoint, endpoint);
+        setDependencyPreview(null);
+    }
+
+    function updateDependencyPreviewPointer(event) {
+        const pointerPoint = getTimelineBodyPointerPoint(
+            event,
+            timelineBarsRef.current,
+            metricsRef.current.rowHeight,
+        );
+
+        if (!pointerPoint) {
+            return;
+        }
+
+        setDependencyPreview(function updateCurrentDependencyPreview(currentDependencyPreview) {
+            if (!currentDependencyPreview) {
+                return currentDependencyPreview;
+            }
+
+            return {
+                ...currentDependencyPreview,
+                toPoint: pointerPoint,
+            };
+        });
+    }
+
     function handleTimelinePanelScroll(event) {
         syncEventBarScrollPosition(event.currentTarget);
         scheduleVisibleTimelineRangeUpdate(event.currentTarget);
@@ -876,14 +1024,6 @@ export default function TimelineChart(props) {
     }
 
     function handleTimelineMouseDown(event) {
-        if (event.target instanceof Element && event.target.closest(".task-bar")) {
-            return;
-        }
-
-        if (event.target instanceof Element && event.target.closest(".timeline-header")) {
-            return;
-        }
-
         const panel = timelinePanelRef.current;
 
         if (!panel) {
@@ -891,6 +1031,29 @@ export default function TimelineChart(props) {
         }
 
         if (isTimelineScrollbarMouseDown(event, panel)) {
+            return;
+        }
+
+        if (dependencyPreviewRef.current) {
+            event.preventDefault();
+
+            if (event.button === RIGHT_MOUSE_BUTTON) {
+                startTimelinePan(panel, event);
+                return;
+            }
+
+            if (event.button === LEFT_MOUSE_BUTTON) {
+                setDependencyPreview(null);
+            }
+
+            return;
+        }
+
+        if (event.target instanceof Element && event.target.closest(".task-bar")) {
+            return;
+        }
+
+        if (event.target instanceof Element && event.target.closest(".timeline-header")) {
             return;
         }
 
@@ -905,6 +1068,10 @@ export default function TimelineChart(props) {
             return;
         }
 
+        startTimelinePan(panel, event);
+    }
+
+    function startTimelinePan(panel, event) {
         dragStateRef.current = {
             type: TIMELINE_DRAG_TYPE_PAN,
             panel,
@@ -1023,6 +1190,24 @@ export default function TimelineChart(props) {
         hideTaskHoverBubble();
     }
 
+    function handleMultiTaskBarMouseMove(event, task) {
+        if (getMultiTaskDependencyHandleTaskIdAtPointer(event) !== task.id) {
+            hideTaskHoverBubble();
+            return;
+        }
+
+        handleTaskBarMouseMove(event, task);
+    }
+
+    function handleTimelineBarsMouseMove(event) {
+        setActiveMultiTaskHandleTaskId(getMultiTaskDependencyHandleTaskIdAtPointer(event));
+    }
+
+    function handleTimelineBarsMouseLeave() {
+        setActiveMultiTaskHandleTaskId(null);
+        handleTaskBarMouseLeave();
+    }
+
     function handleSubTaskBarMouseDown(event, subBar) {
         if (event.button !== LEFT_MOUSE_BUTTON) {
             return;
@@ -1103,18 +1288,23 @@ export default function TimelineChart(props) {
         };
     }
 
-    function handleSubTaskBarMouseMove(event, subTask) {
+    function handleSubTaskBarMouseMove(event, subBar) {
         scheduleTaskHoverBubblePosition(event);
 
-        if (taskHoverBubbleTaskIdRef.current === subTask.id) {
+        if (taskHoverBubbleTaskIdRef.current === subBar.subTask.id) {
             return;
         }
 
-        taskHoverBubbleTaskIdRef.current = subTask.id;
+        taskHoverBubbleTaskIdRef.current = subBar.subTask.id;
         setTaskHoverBubble({
-            task: subTask,
+            task: subBar.subTask,
             isSubTask: true,
         });
+    }
+
+    function handleSubTaskBarMouseLeave() {
+        setSubTaskHoverParentTaskId(null);
+        handleTaskBarMouseLeave();
     }
 
     function showTaskHoverBubble(event, task) {
@@ -1598,6 +1788,118 @@ export default function TimelineChart(props) {
         applySubTaskElementMovePreview(subTaskBarElement, dragState);
     }
 
+    function renderDependencyHandles(task, isMultiTaskWrapper = false) {
+        const dependencyTaskKind = isMultiTaskWrapper ? "multi-task" : "task";
+
+        return (
+            <>
+                <Box
+                    className="task-bar-dependency-handle task-bar-dependency-handle-left"
+                    data-dependency-task-id={task.id}
+                    data-dependency-task-kind={dependencyTaskKind}
+                    onMouseDown={function startLeftDependency(event) {
+                        handleDependencyHandleMouseDown(
+                            event,
+                            task,
+                            DEPENDENCY_SIDE_LEFT,
+                        );
+                    }}
+                />
+                <Box
+                    className="task-bar-dependency-handle task-bar-dependency-handle-right"
+                    data-dependency-task-id={task.id}
+                    data-dependency-task-kind={dependencyTaskKind}
+                    onMouseDown={function startRightDependency(event) {
+                        handleDependencyHandleMouseDown(
+                            event,
+                            task,
+                            DEPENDENCY_SIDE_RIGHT,
+                        );
+                    }}
+                />
+            </>
+        );
+    }
+
+    function renderDependencyLayer() {
+        const previewLayout = dependencyPreview
+            ? getPreviewDependencyLayout(dependencyPreview)
+            : null;
+
+        return (
+            <svg
+                aria-hidden="true"
+                className="timeline-dependency-svg"
+                focusable="false"
+                height={timelineBodyHeight}
+                viewBox={`0 0 ${metrics.timelineWidth} ${timelineBodyHeight}`}
+                width={metrics.timelineWidth}
+            >
+                <defs>
+                    <marker
+                        id={DEPENDENCY_ARROW_MARKER_ID}
+                        markerHeight="4"
+                        markerWidth="4"
+                        orient="auto"
+                        refX="3.7"
+                        refY="2"
+                        viewBox="0 0 4 4"
+                    >
+                        <path className="timeline-dependency-marker" d="M 0 0 L 4 2 L 0 4 z" />
+                    </marker>
+                    <marker
+                        id={DEPENDENCY_PREVIEW_ARROW_MARKER_ID}
+                        markerHeight="4"
+                        markerWidth="4"
+                        orient="auto"
+                        refX="3.7"
+                        refY="2"
+                        viewBox="0 0 4 4"
+                    >
+                        <path
+                            className="timeline-dependency-preview-marker"
+                            d="M 0 0 L 4 2 L 0 4 z"
+                        />
+                    </marker>
+                </defs>
+                {dependencyLayouts.map(function renderDependencyPath(dependencyLayout) {
+                    return (
+                        <g
+                            key={dependencyLayout.id}
+                            className={getDependencyPathClassName(dependencyLayout.isSelected)}
+                        >
+                            <path
+                                className="timeline-dependency-line"
+                                d={dependencyLayout.path}
+                                markerEnd={`url(#${DEPENDENCY_ARROW_MARKER_ID})`}
+                            />
+                            <path
+                                className="timeline-dependency-hit-path"
+                                d={dependencyLayout.path}
+                                onMouseDown={function selectDependency(event) {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    onClearHighlightRef.current();
+                                    onSelectDependencyRef.current(
+                                        dependencyLayout.id,
+                                        event.ctrlKey || event.metaKey,
+                                    );
+                                }}
+                            />
+                        </g>
+                    );
+                })}
+                {previewLayout && (
+                    <path
+                        className="timeline-dependency-preview-line"
+                        d={previewLayout.path}
+                        markerEnd={`url(#${DEPENDENCY_PREVIEW_ARROW_MARKER_ID})`}
+                    />
+                )}
+            </svg>
+        );
+    }
+
     return (
         <Box
             ref={setTimelinePanelElement}
@@ -1813,10 +2115,21 @@ export default function TimelineChart(props) {
                     })}
                 </Box>
                 <Box
-                    className="timeline-bars"
+                    className="timeline-dependencies"
                     sx={{
                         top: `${metrics.headerHeight}px`,
                     }}
+                >
+                    {renderDependencyLayer()}
+                </Box>
+                <Box
+                    className="timeline-bars"
+                    ref={timelineBarsRef}
+                    sx={{
+                        top: `${metrics.headerHeight}px`,
+                    }}
+                    onMouseMove={handleTimelineBarsMouseMove}
+                    onMouseLeave={handleTimelineBarsMouseLeave}
                 >
                     {metrics.bars.map(function renderTaskBar(bar) {
                         const isSelected = selectedTaskIds.includes(bar.task.id);
@@ -1828,7 +2141,15 @@ export default function TimelineChart(props) {
                             taskDragPreview,
                             isTaskDragPreviewTarget,
                         );
-                        const taskBarVisualLayout = getTaskBarVisualLayout(taskBarLayout);
+                        const taskBarVisualLayout = bar.isMultiPhaseWrapper
+                            ? getMultiTaskWrapperVisualLayout(
+                                taskBarLayout,
+                                getMultiTaskWrapperSubTaskBars(
+                                    timelineSubTaskBars,
+                                    bar.task.id,
+                                ),
+                            )
+                            : getTaskBarVisualLayout(taskBarLayout);
                         const taskBarTransform = getTaskBarTransform(
                             taskDragPreview,
                             isTaskDragPreviewTarget,
@@ -1842,6 +2163,7 @@ export default function TimelineChart(props) {
                                         setTaskBarElement(bar.task.id, taskBarElement);
                                     }}
                                     aria-label={bar.task.name}
+                                    data-task-id={bar.task.id}
                                     role="button"
                                     tabIndex={0}
                                     className={getMultiTaskWrapperClassName(
@@ -1849,11 +2171,13 @@ export default function TimelineChart(props) {
                                         isCut,
                                         isDelayed,
                                         isTaskDragPreviewTarget,
+                                        activeMultiTaskHandleTaskId === bar.task.id,
                                     )}
                                     sx={{
                                         left: `${taskBarVisualLayout.left}px`,
                                         top: `${taskBarVisualLayout.top}px`,
                                         width: `${taskBarVisualLayout.width}px`,
+                                        height: `${taskBarVisualLayout.height}px`,
                                         transform: taskBarTransform,
                                     }}
                                     onDoubleClick={function openMultiTaskEdit(event) {
@@ -1865,25 +2189,34 @@ export default function TimelineChart(props) {
                                         handleTaskBarMouseDown(event, bar.task);
                                     }}
                                     onMouseEnter={function showMultiTaskHover(event) {
-                                        handleTaskBarMouseMove(event, bar.task);
+                                        handleMultiTaskBarMouseMove(event, bar.task);
                                     }}
                                     onMouseMove={function moveMultiTaskHover(event) {
-                                        handleTaskBarMouseMove(event, bar.task);
+                                        handleMultiTaskBarMouseMove(event, bar.task);
                                     }}
-                                    onMouseLeave={handleTaskBarMouseLeave}
-                                />
+                                >
+                                    {renderDependencyHandles(bar.task, true)}
+                                </Box>
                             );
                         }
 
+                        const isRelease = isReleaseTask(bar.task);
+                        const releaseTaskColor = getTaskColor(bar.task);
+                        const visibleTaskBarLayout = isRelease
+                            ? getReleaseTaskBarVisualLayout(taskBarLayout)
+                            : taskBarVisualLayout;
                         const canResizeTask = (
-                            !isReleaseTask(bar.task)
+                            !isRelease
                             && selectedTaskIds.length <= 1
-                            && taskBarVisualLayout.width >= MIN_TASK_BAR_RESIZE_WIDTH_PIXELS
+                            && visibleTaskBarLayout.width >= MIN_TASK_BAR_RESIZE_WIDTH_PIXELS
                         );
-                        const shouldShowTaskLabel = shouldShowTaskBarLabel(
-                            bar.task.name,
-                            taskBarVisualLayout.width,
-                            canResizeTask,
+                        const shouldShowTaskLabel = (
+                            !isRelease
+                            && shouldShowTaskBarLabel(
+                                bar.task.name,
+                                visibleTaskBarLayout.width,
+                                canResizeTask,
+                            )
                         );
 
                         return (
@@ -1900,13 +2233,19 @@ export default function TimelineChart(props) {
                                     isCut,
                                     isDelayed,
                                     isTaskDragPreviewTarget,
+                                    isRelease,
                                 )}
                                 sx={{
-                                    left: `${taskBarVisualLayout.left}px`,
-                                    top: `${taskBarVisualLayout.top}px`,
-                                    width: `${taskBarVisualLayout.width}px`,
-                                    backgroundColor: getTaskColor(bar.task),
+                                    left: `${visibleTaskBarLayout.left}px`,
+                                    top: `${visibleTaskBarLayout.top}px`,
+                                    width: `${visibleTaskBarLayout.width}px`,
+                                    height: visibleTaskBarLayout.height
+                                        ? `${visibleTaskBarLayout.height}px`
+                                        : undefined,
+                                    backgroundColor: isRelease ? undefined : releaseTaskColor,
                                     transform: taskBarTransform,
+                                    "--task-release-color": releaseTaskColor,
+                                    "--task-release-diamond-size": `${RELEASE_TASK_DIAMOND_SIDE_PIXELS}px`,
                                 }}
                                 onDoubleClick={function openTaskEdit(event) {
                                     event.stopPropagation();
@@ -1953,12 +2292,16 @@ export default function TimelineChart(props) {
                                         }}
                                     />
                                 )}
-                                <Box
-                                    className="task-bar-progress"
-                                    sx={{
-                                        width: `${bar.task.progressPercent}%`,
-                                    }}
-                                />
+                                {isRelease ? (
+                                    <Box className="task-bar-release-diamond" />
+                                ) : (
+                                    <Box
+                                        className="task-bar-progress"
+                                        sx={{
+                                            width: `${bar.task.progressPercent}%`,
+                                        }}
+                                    />
+                                )}
                                 {shouldShowTaskLabel && (
                                     <Typography className="task-bar-label">
                                         {bar.task.name}
@@ -1976,6 +2319,7 @@ export default function TimelineChart(props) {
                                         }}
                                     />
                                 )}
+                                {renderDependencyHandles(bar.task)}
                             </Box>
                         );
                     })}
@@ -2000,12 +2344,22 @@ export default function TimelineChart(props) {
                         );
                         const isCutSub = cutSubTaskInfo?.subTaskId === subBar.subTask.id;
                         const isReleaseSub = isReleaseTask(subBar.subTask);
-                        const diamondSize = getSubTaskReleaseDiamondSize();
+                        const releaseSubTaskColor = getTaskColor(subBar.subTask);
+                        const releaseSubTaskLayout = isReleaseSub
+                            ? getReleaseTaskBarVisualLayout(subTaskLayout)
+                            : null;
                         const subBarLeft = isReleaseSub
-                            ? visualLayout.left + visualLayout.width / 2 - diamondSize / 2
+                            ? releaseSubTaskLayout.left
                             : visualLayout.left;
-                        const subBarWidth = isReleaseSub ? diamondSize : visualLayout.width;
-                        const subBarHeight = isReleaseSub ? diamondSize : TASK_BAR_HEIGHT_PIXELS;
+                        const subBarTop = isReleaseSub
+                            ? releaseSubTaskLayout.top
+                            : visualLayout.top;
+                        const subBarWidth = isReleaseSub
+                            ? releaseSubTaskLayout.width
+                            : visualLayout.width;
+                        const subBarHeight = isReleaseSub
+                            ? releaseSubTaskLayout.height
+                            : TASK_BAR_HEIGHT_PIXELS;
                         const isDraggingThisSub = (
                             taskDragPreview?.type === TASK_DRAG_TYPE_SUB_TASK_MOVE
                             && taskDragPreview?.subTaskId === subBar.subTask.id
@@ -2040,17 +2394,22 @@ export default function TimelineChart(props) {
                                     );
                                 }}
                                 aria-label={subBar.subTask.name}
+                                data-parent-task-id={subBar.parentTaskId}
                                 role="button"
                                 tabIndex={0}
                                 className={subTaskClassName}
                                 sx={{
                                     position: "absolute",
                                     left: `${subBarLeft}px`,
-                                    top: `${visualLayout.top}px`,
+                                    top: `${subBarTop}px`,
                                     width: `${subBarWidth}px`,
                                     height: `${subBarHeight}px`,
-                                    backgroundColor: getTaskColor(subBar.subTask),
+                                    backgroundColor: isReleaseSub
+                                        ? undefined
+                                        : releaseSubTaskColor,
                                     transform: subTaskTransform,
+                                    "--task-release-color": releaseSubTaskColor,
+                                    "--task-release-diamond-size": `${RELEASE_TASK_DIAMOND_SIDE_PIXELS}px`,
                                 }}
                                 onDoubleClick={function openSubTaskEdit(event) {
                                     event.stopPropagation();
@@ -2060,12 +2419,12 @@ export default function TimelineChart(props) {
                                     handleSubTaskBarMouseDown(event, subBar);
                                 }}
                                 onMouseEnter={function showSubTaskHover(event) {
-                                    handleSubTaskBarMouseMove(event, subBar.subTask);
+                                    handleSubTaskBarMouseMove(event, subBar);
                                 }}
                                 onMouseMove={function moveSubTaskHover(event) {
-                                    handleSubTaskBarMouseMove(event, subBar.subTask);
+                                    handleSubTaskBarMouseMove(event, subBar);
                                 }}
-                                onMouseLeave={handleTaskBarMouseLeave}
+                                onMouseLeave={handleSubTaskBarMouseLeave}
                             >
                                 {!isReleaseSub && (
                                     <Box
@@ -2086,6 +2445,9 @@ export default function TimelineChart(props) {
                                             width: `${subBar.subTask.progressPercent}%`,
                                         }}
                                     />
+                                )}
+                                {isReleaseSub && (
+                                    <Box className="task-bar-release-diamond" />
                                 )}
                                 {shouldShowSubTaskLabel && (
                                     <Typography className="task-bar-label">
@@ -2320,8 +2682,18 @@ function getTimelineHeaderCellClassName(
 }
 
 
-function getTaskBarClassName(isSelected, isCut, isDelayed, isTaskDragPreviewTarget) {
+function getTaskBarClassName(
+    isSelected,
+    isCut,
+    isDelayed,
+    isTaskDragPreviewTarget,
+    isRelease,
+) {
     const classNames = ["task-bar"];
+
+    if (isRelease) {
+        classNames.push("task-bar-release");
+    }
 
     if (isSelected) {
         classNames.push("task-bar-selected");
@@ -2343,7 +2715,13 @@ function getTaskBarClassName(isSelected, isCut, isDelayed, isTaskDragPreviewTarg
 }
 
 
-function getMultiTaskWrapperClassName(isSelected, isCut, isDelayed, isTaskDragPreviewTarget) {
+function getMultiTaskWrapperClassName(
+    isSelected,
+    isCut,
+    isDelayed,
+    isTaskDragPreviewTarget,
+    hasActiveDependencyHandles,
+) {
     const classNames = ["task-bar", "task-bar-multi-phase-wrapper"];
 
     if (isSelected) {
@@ -2362,6 +2740,10 @@ function getMultiTaskWrapperClassName(isSelected, isCut, isDelayed, isTaskDragPr
         classNames.push("task-bar-drag-preview");
     }
 
+    if (hasActiveDependencyHandles) {
+        classNames.push("task-bar-dependency-handles-active");
+    }
+
     return classNames.join(" ");
 }
 
@@ -2378,6 +2760,7 @@ function getSubTaskBarClassName(isSelected, isCut, isRelease, isTaskDragPreviewT
     }
 
     if (isRelease) {
+        classNames.push("task-bar-release");
         classNames.push("task-bar-sub-task-release");
     }
 
@@ -2386,6 +2769,344 @@ function getSubTaskBarClassName(isSelected, isCut, isRelease, isTaskDragPreviewT
     }
 
     return classNames.join(" ");
+}
+
+
+function getMultiTaskDependencyHandleTaskIdAtPointer(event) {
+    if (typeof document.elementsFromPoint !== "function") {
+        return null;
+    }
+
+    const pointerElements = document.elementsFromPoint(event.clientX, event.clientY);
+
+    for (const element of pointerElements) {
+        if (!(element instanceof Element)) {
+            continue;
+        }
+
+        if (element.closest(".task-bar-sub-task")) {
+            return null;
+        }
+    }
+
+    for (const element of pointerElements) {
+        if (!(element instanceof Element)) {
+            continue;
+        }
+
+        const dependencyHandle = element.closest(".task-bar-dependency-handle");
+
+        if (dependencyHandle?.dataset.dependencyTaskKind === "multi-task") {
+            return dependencyHandle.dataset.dependencyTaskId || null;
+        }
+    }
+
+    for (const element of pointerElements) {
+        if (!(element instanceof Element)) {
+            continue;
+        }
+
+        const multiTaskWrapper = element.closest(".task-bar-multi-phase-wrapper");
+
+        if (multiTaskWrapper) {
+            return multiTaskWrapper.dataset.taskId || null;
+        }
+    }
+
+    return null;
+}
+
+
+function getDependencyPathClassName(isSelected) {
+    const classNames = ["timeline-dependency-path"];
+
+    if (isSelected) {
+        classNames.push("timeline-dependency-path-selected");
+    }
+
+    return classNames.join(" ");
+}
+
+
+function getDependencyLayouts(
+    dependency,
+    selectedDependencyIds,
+    taskBarElements,
+    timelineBarsElement,
+    rowHeight,
+) {
+    if (!timelineBarsElement) {
+        return [];
+    }
+
+    const selectedDependencyIdSet = new Set(selectedDependencyIds);
+    const dependencyLayouts = [];
+
+    dependency.forEach(function buildDependencyLayout(dependencyItem) {
+        const normalizedDependencyItem = getRightToLeftDependencyItem(dependencyItem);
+
+        if (!normalizedDependencyItem) {
+            return;
+        }
+
+        const fromPoint = getTaskDependencyAnchorPoint(
+            normalizedDependencyItem.fromTaskId,
+            normalizedDependencyItem.fromSide,
+            taskBarElements,
+            timelineBarsElement,
+            rowHeight,
+        );
+        const toPoint = getTaskDependencyAnchorPoint(
+            normalizedDependencyItem.toTaskId,
+            normalizedDependencyItem.toSide,
+            taskBarElements,
+            timelineBarsElement,
+            rowHeight,
+        );
+
+        if (!fromPoint || !toPoint) {
+            return;
+        }
+
+        dependencyLayouts.push({
+            id: dependencyItem.id,
+            isSelected: selectedDependencyIdSet.has(dependencyItem.id),
+            path: getDependencyPath(
+                fromPoint,
+                normalizedDependencyItem.fromSide,
+                toPoint,
+                normalizedDependencyItem.toSide,
+            ),
+        });
+    });
+
+    return dependencyLayouts;
+}
+
+
+function getTaskDependencyAnchorPoint(
+    taskId,
+    side,
+    taskBarElements,
+    timelineBarsElement,
+    rowHeight = null,
+) {
+    const taskBarElement = taskBarElements.get(taskId);
+
+    if (!taskBarElement || !timelineBarsElement) {
+        return null;
+    }
+
+    const taskBarBounds = taskBarElement.getBoundingClientRect();
+    const timelineBarsBounds = timelineBarsElement.getBoundingClientRect();
+    const taskBarTop = taskBarBounds.top - timelineBarsBounds.top;
+    const taskBarCenterY = taskBarTop + taskBarBounds.height / 2;
+    const x = side === DEPENDENCY_SIDE_LEFT
+        ? taskBarBounds.left - timelineBarsBounds.left
+        : taskBarBounds.right - timelineBarsBounds.left;
+
+    return {
+        x,
+        y: taskBarCenterY,
+        rowTopY: getDependencyAnchorRowTopY(taskBarCenterY, rowHeight),
+        rowBottomY: getDependencyAnchorRowBottomY(taskBarCenterY, rowHeight),
+    };
+}
+
+
+function getTimelineBodyPointerPoint(event, timelineBarsElement, rowHeight = null) {
+    if (!timelineBarsElement) {
+        return null;
+    }
+
+    const timelineBarsBounds = timelineBarsElement.getBoundingClientRect();
+    const pointerY = event.clientY - timelineBarsBounds.top;
+
+    return {
+        x: event.clientX - timelineBarsBounds.left,
+        y: pointerY,
+        rowTopY: getDependencyPointerRowTopY(pointerY, rowHeight),
+        rowBottomY: getDependencyPointerRowBottomY(pointerY, rowHeight),
+    };
+}
+
+
+function getPreviewDependencyLayout(dependencyPreview) {
+    if (!dependencyPreview.fromPoint || !dependencyPreview.toPoint) {
+        return null;
+    }
+
+    if (dependencyPreview.fromEndpoint.side === DEPENDENCY_SIDE_LEFT) {
+        return {
+            path: getDependencyPath(
+                dependencyPreview.toPoint,
+                DEPENDENCY_SIDE_RIGHT,
+                dependencyPreview.fromPoint,
+                DEPENDENCY_SIDE_LEFT,
+            ),
+        };
+    }
+
+    return {
+        path: getDependencyPath(
+            dependencyPreview.fromPoint,
+            DEPENDENCY_SIDE_RIGHT,
+            dependencyPreview.toPoint,
+            DEPENDENCY_SIDE_LEFT,
+        ),
+    };
+}
+
+
+function getDependencyPath(fromPoint, fromSide, toPoint, toSide) {
+    const fromExitX = getDependencyAdjacentCellOffsetX(fromPoint.x, fromSide);
+    const toEntryX = getDependencyAdjacentCellOffsetX(toPoint.x, toSide);
+
+    if (shouldDependencyTurnBack(fromExitX, fromSide, toEntryX)) {
+        const turnBackY = getDependencyTurnBackY(fromPoint, toPoint);
+
+        return [
+            `M ${formatSvgNumber(fromPoint.x)} ${formatSvgNumber(fromPoint.y)}`,
+            `H ${formatSvgNumber(fromExitX)}`,
+            `V ${formatSvgNumber(turnBackY)}`,
+            `H ${formatSvgNumber(toEntryX)}`,
+            `V ${formatSvgNumber(toPoint.y)}`,
+            `H ${formatSvgNumber(toPoint.x)}`,
+        ].join(" ");
+    }
+
+    return [
+        `M ${formatSvgNumber(fromPoint.x)} ${formatSvgNumber(fromPoint.y)}`,
+        `H ${formatSvgNumber(fromExitX)}`,
+        `V ${formatSvgNumber(toPoint.y)}`,
+        `H ${formatSvgNumber(toEntryX)}`,
+        `H ${formatSvgNumber(toPoint.x)}`,
+    ].join(" ");
+}
+
+
+function getDependencyAdjacentCellOffsetX(pointX, side) {
+    const direction = getDependencySideDirection(side);
+
+    return pointX + direction * DEPENDENCY_ADJACENT_CELL_OFFSET_PIXELS;
+}
+
+
+function shouldDependencyTurnBack(fromExitX, fromSide, toEntryX) {
+    const direction = getDependencySideDirection(fromSide);
+
+    if (direction > 0) {
+        return toEntryX < fromExitX;
+    }
+
+    return toEntryX > fromExitX;
+}
+
+
+function getDependencyTurnBackY(fromPoint, toPoint) {
+    if (fromPoint.y < toPoint.y) {
+        return toPoint.rowTopY ?? toPoint.y;
+    }
+
+    if (fromPoint.y > toPoint.y) {
+        return toPoint.rowBottomY ?? toPoint.y;
+    }
+
+    return toPoint.y;
+}
+
+
+function getDependencyPointerRowTopY(pointerY, rowHeight) {
+    if (!rowHeight) {
+        return null;
+    }
+
+    return Math.floor(pointerY / rowHeight) * rowHeight;
+}
+
+
+function getDependencyPointerRowBottomY(pointerY, rowHeight) {
+    const rowTopY = getDependencyPointerRowTopY(pointerY, rowHeight);
+
+    if (rowTopY === null) {
+        return null;
+    }
+
+    return rowTopY + rowHeight;
+}
+
+
+function getDependencyAnchorRowTopY(taskBarCenterY, rowHeight) {
+    if (!rowHeight) {
+        return null;
+    }
+
+    return taskBarCenterY - rowHeight / 2;
+}
+
+
+function getDependencyAnchorRowBottomY(taskBarCenterY, rowHeight) {
+    if (!rowHeight) {
+        return null;
+    }
+
+    return taskBarCenterY + rowHeight / 2;
+}
+
+
+function getDependencySideDirection(side) {
+    if (side === DEPENDENCY_SIDE_LEFT) {
+        return -1;
+    }
+
+    return 1;
+}
+
+
+function getRightToLeftDependencyItem(dependencyItem) {
+    if (
+        dependencyItem.fromSide === DEPENDENCY_SIDE_RIGHT
+        && dependencyItem.toSide === DEPENDENCY_SIDE_LEFT
+    ) {
+        return dependencyItem;
+    }
+
+    if (
+        dependencyItem.fromSide === DEPENDENCY_SIDE_LEFT
+        && dependencyItem.toSide === DEPENDENCY_SIDE_RIGHT
+    ) {
+        return {
+            ...dependencyItem,
+            fromTaskId: dependencyItem.toTaskId,
+            fromSide: DEPENDENCY_SIDE_RIGHT,
+            toTaskId: dependencyItem.fromTaskId,
+            toSide: DEPENDENCY_SIDE_LEFT,
+        };
+    }
+
+    return null;
+}
+
+
+function hasSameDependencyLayouts(firstLayouts, secondLayouts) {
+    if (firstLayouts.length !== secondLayouts.length) {
+        return false;
+    }
+
+    return firstLayouts.every(function matchDependencyLayout(firstLayout, index) {
+        const secondLayout = secondLayouts[index];
+
+        return (
+            firstLayout.id === secondLayout.id
+            && firstLayout.path === secondLayout.path
+            && firstLayout.isSelected === secondLayout.isSelected
+        );
+    });
+}
+
+
+function formatSvgNumber(value) {
+    return Number(value.toFixed(2));
 }
 
 
@@ -2492,48 +3213,120 @@ function getReleaseEventGroups(tasks, metrics, projectColorMap) {
     const eventGroupMap = new Map();
 
     tasks.forEach(function mapTaskToReleaseEvent(task) {
-        if (task.taskType !== RELEASE_TASK_TYPE) {
-            return;
+        if (task.taskType === RELEASE_TASK_TYPE) {
+            addReleaseEventGroupItem(
+                eventGroups,
+                eventGroupMap,
+                getTaskReleaseEventItem(task, metrics, projectColorMap),
+                metrics,
+            );
         }
 
-        const eventDate = parseDateString(task.startDate);
-
-        if (!isValidDate(eventDate)) {
-            return;
-        }
-
-        const eventCellLayout = getTimelineCellLayout(eventDate, metrics.gridCells);
-
-        if (!eventCellLayout) {
-            return;
-        }
-
-        let eventGroup = eventGroupMap.get(eventCellLayout.key);
-
-        if (!eventGroup) {
-            const markerLeft = eventCellLayout.left + eventCellLayout.width / 2;
-
-            eventGroup = {
-                key: eventCellLayout.key,
-                left: markerLeft,
-                columnType: getEventMarkerColumnTypeAtOffset(markerLeft, metrics),
-                events: [],
-            };
-            eventGroupMap.set(eventCellLayout.key, eventGroup);
-            eventGroups.push(eventGroup);
-        }
-
-        eventGroup.events.push({
-            id: task.id,
-            name: task.name,
-            dateLabel: shouldShowReleaseEventFlagDate(metrics)
-                ? formatEventFlagDate(eventDate)
-                : null,
-            backgroundColor: getReleaseEventFlagBackgroundColor(task, projectColorMap),
-        });
+        getReleaseSubTaskEventItems(task, metrics, projectColorMap).forEach(
+            function addReleaseSubTaskEventItem(eventItem) {
+                addReleaseEventGroupItem(
+                    eventGroups,
+                    eventGroupMap,
+                    eventItem,
+                    metrics,
+                );
+            },
+        );
     });
 
     return eventGroups;
+}
+
+
+function addReleaseEventGroupItem(eventGroups, eventGroupMap, eventItem, metrics) {
+    if (!eventItem) {
+        return;
+    }
+
+    let eventGroup = eventGroupMap.get(eventItem.eventCellLayout.key);
+
+    if (!eventGroup) {
+        const markerLeft = (
+            eventItem.eventCellLayout.left
+            + eventItem.eventCellLayout.width / 2
+        );
+
+        eventGroup = {
+            key: eventItem.eventCellLayout.key,
+            left: markerLeft,
+            columnType: getEventMarkerColumnTypeAtOffset(markerLeft, metrics),
+            events: [],
+        };
+        eventGroupMap.set(eventItem.eventCellLayout.key, eventGroup);
+        eventGroups.push(eventGroup);
+    }
+
+    eventGroup.events.push({
+        id: eventItem.id,
+        name: eventItem.name,
+        dateLabel: shouldShowReleaseEventFlagDate(metrics)
+            ? formatEventFlagDate(eventItem.date)
+            : null,
+        backgroundColor: eventItem.backgroundColor,
+    });
+}
+
+
+function getTaskReleaseEventItem(task, metrics, projectColorMap) {
+    return getReleaseEventItem(
+        task.id,
+        task.name,
+        task.startDate,
+        getReleaseEventFlagBackgroundColor(task, projectColorMap),
+        metrics,
+    );
+}
+
+
+function getReleaseSubTaskEventItems(task, metrics, projectColorMap) {
+    if (!task.subTasks || task.subTasks.length === 0) {
+        return [];
+    }
+
+    return task.subTasks
+        .filter(function matchReleaseSubTask(subTask) {
+            return subTask.taskType === RELEASE_TASK_TYPE;
+        })
+        .map(function mapReleaseSubTaskEventItem(subTask) {
+            return getReleaseEventItem(
+                `${task.id}:${subTask.id}`,
+                subTask.name,
+                subTask.startDate,
+                getReleaseEventFlagBackgroundColor(task, projectColorMap),
+                metrics,
+            );
+        })
+        .filter(function keepReleaseSubTaskEventItem(eventItem) {
+            return Boolean(eventItem);
+        });
+}
+
+
+function getReleaseEventItem(id, name, dateString, backgroundColor, metrics) {
+    const eventDate = parseDateString(dateString);
+
+    if (!isValidDate(eventDate)) {
+        return null;
+    }
+
+    const eventCellLayout = getTimelineCellLayout(eventDate, metrics.gridCells);
+
+    if (!eventCellLayout) {
+        return null;
+    }
+
+    return {
+        id,
+        name,
+        date: eventDate,
+        eventCellLayout,
+        backgroundColor,
+    };
 }
 
 
@@ -3285,17 +4078,21 @@ function getRectangleSelectedTaskIds(bars, rectangle, isFullContainmentSelection
 
 
 function getTaskBarSelectionBounds(bar) {
-    const taskBarVisualLayout = getTaskBarVisualLayout({
+    const taskBarLayout = {
         left: bar.left,
         top: bar.top,
         width: bar.width,
-    });
+    };
+    const taskBarVisualLayout = isReleaseTask(bar.task)
+        ? getReleaseTaskBarVisualLayout(taskBarLayout)
+        : getTaskBarVisualLayout(taskBarLayout);
+    const taskBarHeight = taskBarVisualLayout.height || TASK_BAR_HEIGHT_PIXELS;
 
     return {
         left: taskBarVisualLayout.left,
         top: taskBarVisualLayout.top,
         right: taskBarVisualLayout.left + taskBarVisualLayout.width,
-        bottom: taskBarVisualLayout.top + TASK_BAR_HEIGHT_PIXELS,
+        bottom: taskBarVisualLayout.top + taskBarHeight,
     };
 }
 
@@ -3454,7 +4251,130 @@ function getTaskBarVisualLayout(taskBarLayout) {
             taskBarLayout.width - horizontalInset * 2,
             MIN_TASK_BAR_DISPLAY_WIDTH_PIXELS,
         ),
+        height: TASK_BAR_HEIGHT_PIXELS,
     };
+}
+
+
+function getReleaseTaskBarVisualLayout(taskBarLayout) {
+    const centerX = taskBarLayout.left + taskBarLayout.width / 2;
+
+    return {
+        left: centerX - RELEASE_TASK_BAR_SIZE_PIXELS / 2,
+        top: taskBarLayout.top + TASK_BAR_VERTICAL_INSET_PIXELS,
+        width: RELEASE_TASK_BAR_SIZE_PIXELS,
+        height: RELEASE_TASK_BAR_SIZE_PIXELS,
+    };
+}
+
+
+function getReleaseTaskDiamondVisualLayout(taskBarLayout) {
+    const centerX = taskBarLayout.left + taskBarLayout.width / 2;
+    const centerY = (
+        taskBarLayout.top
+        + TASK_BAR_VERTICAL_INSET_PIXELS
+        + TASK_BAR_HEIGHT_PIXELS / 2
+    );
+
+    return {
+        left: centerX - RELEASE_TASK_DIAMOND_VISUAL_SIZE_PIXELS / 2,
+        top: centerY - RELEASE_TASK_DIAMOND_VISUAL_SIZE_PIXELS / 2,
+        width: RELEASE_TASK_DIAMOND_VISUAL_SIZE_PIXELS,
+        height: RELEASE_TASK_DIAMOND_VISUAL_SIZE_PIXELS,
+    };
+}
+
+
+function getMultiTaskWrapperVisualLayout(taskBarLayout, subTaskBars) {
+    const taskBarVisualLayout = getMultiTaskWrapperBaseVisualLayout(
+        taskBarLayout,
+        subTaskBars,
+    );
+
+    return {
+        left: taskBarVisualLayout.left - MULTI_TASK_WRAPPER_HORIZONTAL_OUTSET_PIXELS,
+        top: taskBarVisualLayout.top - MULTI_TASK_WRAPPER_VERTICAL_OUTSET_PIXELS,
+        width: (
+            taskBarVisualLayout.width
+            + MULTI_TASK_WRAPPER_HORIZONTAL_OUTSET_PIXELS * 2
+        ),
+        height: (
+            taskBarVisualLayout.height
+            + MULTI_TASK_WRAPPER_VERTICAL_OUTSET_PIXELS * 2
+        ),
+    };
+}
+
+
+function getMultiTaskWrapperBaseVisualLayout(taskBarLayout, subTaskBars) {
+    if (!subTaskBars || subTaskBars.length === 0) {
+        return getTaskBarVisualLayout(taskBarLayout);
+    }
+
+    const subTaskVisualBounds = getSubTaskVisualBounds(subTaskBars);
+
+    if (!subTaskVisualBounds) {
+        return getTaskBarVisualLayout(taskBarLayout);
+    }
+
+    return {
+        left: subTaskVisualBounds.left,
+        top: subTaskVisualBounds.top,
+        width: subTaskVisualBounds.right - subTaskVisualBounds.left,
+        height: subTaskVisualBounds.bottom - subTaskVisualBounds.top,
+    };
+}
+
+
+function getSubTaskVisualBounds(subTaskBars) {
+    const subTaskVisualLayouts = subTaskBars.map(function mapSubTaskVisualLayout(subTaskBar) {
+        return getSubTaskWrapperVisualLayout(subTaskBar);
+    });
+
+    if (subTaskVisualLayouts.length === 0) {
+        return null;
+    }
+
+    return subTaskVisualLayouts.reduce(function mergeSubTaskVisualBounds(bounds, visualLayout) {
+        return {
+            left: Math.min(bounds.left, visualLayout.left),
+            top: Math.min(bounds.top, visualLayout.top),
+            right: Math.max(bounds.right, visualLayout.left + visualLayout.width),
+            bottom: Math.max(
+                bounds.bottom,
+                visualLayout.top + getVisualLayoutHeight(visualLayout),
+            ),
+        };
+    }, {
+        left: subTaskVisualLayouts[0].left,
+        top: subTaskVisualLayouts[0].top,
+        right: subTaskVisualLayouts[0].left + subTaskVisualLayouts[0].width,
+        bottom: (
+            subTaskVisualLayouts[0].top
+            + getVisualLayoutHeight(subTaskVisualLayouts[0])
+        ),
+    });
+}
+
+
+function getSubTaskWrapperVisualLayout(subTaskBar) {
+    if (isReleaseTask(subTaskBar.subTask)) {
+        return getReleaseTaskDiamondVisualLayout(subTaskBar);
+    }
+
+    return getSubTaskBarVisualLayout(subTaskBar);
+}
+
+
+function getMultiTaskWrapperSubTaskBars(subTaskBars, taskId) {
+    return subTaskBars.filter(function matchParentTask(subTaskBar) {
+        return subTaskBar.parentTaskId === taskId;
+    });
+}
+
+
+function getVisualLayoutHeight(visualLayout) {
+    return visualLayout.height || TASK_BAR_HEIGHT_PIXELS;
 }
 
 
@@ -3468,12 +4388,8 @@ function getSubTaskBarVisualLayout(subTaskBar) {
         left: subTaskBar.left + horizontalInset,
         top: subTaskBar.top + TASK_BAR_VERTICAL_INSET_PIXELS,
         width: Math.max(0, subTaskBar.width - horizontalInset * 2),
+        height: TASK_BAR_HEIGHT_PIXELS,
     };
-}
-
-
-function getSubTaskReleaseDiamondSize() {
-    return TASK_BAR_HEIGHT_PIXELS - TASK_BAR_VERTICAL_INSET_PIXELS * 2;
 }
 
 

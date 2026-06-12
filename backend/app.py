@@ -10,6 +10,7 @@ from models import (
     DayOffBulkCreate,
     DayOffDateList,
     DayOffListUpdate,
+    Dependency,
     PlannerData,
     ProjectName,
     ProjectNameListUpdate,
@@ -24,6 +25,7 @@ from storage import (
     delete_task,
     list_assignees,
     list_day_offs,
+    list_dependency,
     list_project_names,
     list_tasks,
     replace_assignees,
@@ -96,6 +98,11 @@ def get_project_names() -> list[ProjectName]:
     return list_project_names()
 
 
+@app.get("/api/dependency", response_model=list[Dependency])
+def get_dependency() -> list[Dependency]:
+    return list_dependency()
+
+
 @app.post("/api/tasks", response_model=Task, status_code=status.HTTP_201_CREATED)
 def post_task(task_create: TaskCreate, after_task_id: str | None = None) -> Task:
     return create_task(task_create, after_task_id)
@@ -108,7 +115,7 @@ def post_day_offs_bulk(day_off_create: DayOffBulkCreate) -> list[DayOff]:
 
 @app.put("/api/tasks/bulk", response_model=list[Task])
 def put_tasks_bulk(task_list_update: TaskListUpdate) -> list[Task]:
-    return replace_tasks(task_list_update.tasks)
+    return replace_tasks(task_list_update.tasks, task_list_update.dependency)
 
 
 @app.put("/api/day-offs/bulk", response_model=list[DayOff])
@@ -131,7 +138,7 @@ async def post_tasks_bulk_sync(request: Request) -> list[Task]:
     payload = await request.json()
     task_list_update = TaskListUpdate.model_validate(payload)
 
-    return replace_tasks(task_list_update.tasks)
+    return replace_tasks(task_list_update.tasks, task_list_update.dependency)
 
 
 @app.put("/api/tasks/{task_id}", response_model=Task)

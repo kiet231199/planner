@@ -92,7 +92,7 @@ export const TASK_LIST_COLUMNS = [
     },
     {
         id: "stopDate",
-        label: "Stop date",
+        label: "End date",
         minimumWidth: 112,
         width: "112px",
         canHide: true,

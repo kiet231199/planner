@@ -138,7 +138,7 @@ function getSubTaskRowErrors(subTask, subTasks) {
     }
 
     if (!isRelease && !subTask.stopDate) {
-        errors.stopDate = "Stop date is required.";
+        errors.stopDate = "End date is required.";
     }
 
     if (
@@ -147,7 +147,7 @@ function getSubTaskRowErrors(subTask, subTasks) {
         && subTask.stopDate
         && subTask.stopDate < subTask.startDate
     ) {
-        errors.stopDate = "Stop date must be on or after start date.";
+        errors.stopDate = "End date must be on or after start date.";
     }
 
     if (
@@ -366,7 +366,7 @@ export default function SubTaskDialog(props) {
                                 <TableCell className="sub-task-name-cell">Task name</TableCell>
                                 <TableCell className="sub-task-compact-cell">Type</TableCell>
                                 <TableCell className="sub-task-date-cell">Start date</TableCell>
-                                <TableCell className="sub-task-date-cell">Stop date</TableCell>
+                                <TableCell className="sub-task-date-cell">End date</TableCell>
                                 <TableCell className="sub-task-progress-cell">
                                     Progress
                                 </TableCell>

@@ -614,7 +614,7 @@ export default function TaskForm(props) {
                             onChange={handleFieldChange}
                         />
                         <PlannerDateField
-                            label="Stop date"
+                            label="End date"
                             name="stopDate"
                             value={formValues.stopDate}
                             error={Boolean(formErrors.stopDate)}
@@ -768,7 +768,7 @@ function validateForm(formValues) {
     }
 
     if (formValues.taskType !== RELEASE_TASK_TYPE && !formValues.stopDate) {
-        errors.stopDate = "Stop date is required.";
+        errors.stopDate = "End date is required.";
     }
 
     if (
@@ -777,7 +777,7 @@ function validateForm(formValues) {
         && formValues.stopDate
         && formValues.stopDate < formValues.startDate
     ) {
-        errors.stopDate = "Stop date must be on or after start date.";
+        errors.stopDate = "End date must be on or after start date.";
     }
 
     return errors;
@@ -808,7 +808,7 @@ function validateBulkForm(formValues, dirtyFields, tasks) {
         });
 
         if (hasNonReleaseTask) {
-            errors.stopDate = "Stop date is required.";
+            errors.stopDate = "End date is required.";
         }
     }
 
@@ -824,7 +824,7 @@ function validateBulkForm(formValues, dirtyFields, tasks) {
     });
 
     if (hasInvalidDateRange) {
-        errors.stopDate = "Stop date must be on or after start date.";
+        errors.stopDate = "End date must be on or after start date.";
     }
 
     return errors;

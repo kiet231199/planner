@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import AccountTreeOutlinedIcon from "@mui/icons-material/AccountTreeOutlined";
 import AssignmentIcon from "@mui/icons-material/Assignment";
+import ContentCopyOutlinedIcon from "@mui/icons-material/ContentCopyOutlined";
 import ManageAccountsOutlinedIcon from "@mui/icons-material/ManageAccountsOutlined";
 import {
     Box,
@@ -54,6 +55,7 @@ const DEFAULT_FORM_VALUES = {
     startDate: "",
     stopDate: "",
     progressPercent: 0,
+    parentTaskId: "",
     subTasks: [],
 };
 const FORM_FIELD_NAMES = Object.keys(DEFAULT_FORM_VALUES);
@@ -66,6 +68,7 @@ export default function TaskForm(props) {
     const {
         initialTask,
         initialTasks = [],
+        initialParentTaskId = "",
         isSaving,
         assignees = [],
         projectNames = [],
@@ -81,7 +84,7 @@ export default function TaskForm(props) {
     const isEditMode = editTasks.length > 0;
     const isBulkEditMode = editTasks.length > 1;
     const [formValues, setFormValues] = useState(function getInitialState() {
-        return getInitialFormValuesForMode(initialTask, editTasks);
+        return getInitialFormValuesForMode(initialTask, editTasks, initialParentTaskId);
     });
     const [formErrors, setFormErrors] = useState({});
     const [mixedFields] = useState(function getInitialMixedState() {
@@ -102,6 +105,8 @@ export default function TaskForm(props) {
     }, [projectNames]);
     const isReleaseTask = formValues.taskType === RELEASE_TASK_TYPE;
     const isMultiPhaseTask = formValues.taskType === MULTI_PHASE_TASK_TYPE;
+    const isParentTask = !isBulkEditMode && Array.isArray(initialTask?.childTasks)
+        && initialTask.childTasks.length > 0;
     const shouldShowDateRangeFields = shouldShowTaskDateRangeFields(
         isBulkEditMode,
         isReleaseTask,
@@ -113,6 +118,7 @@ export default function TaskForm(props) {
         isMultiPhaseTask,
     );
     const shouldShowProgressField = !isMultiPhaseTask || isBulkEditMode;
+    const isCopyTaskIdDisabled = !isEditMode || isBulkEditMode || !initialTask?.id;
     const initialEditSubTaskId = getInitialEditSubTaskId(
         subTaskEditRequest,
         initialTask,
@@ -332,7 +338,7 @@ export default function TaskForm(props) {
     }
 
     function resetForm() {
-        setFormValues(getInitialFormValuesForMode(initialTask, editTasks));
+        setFormValues(getInitialFormValuesForMode(initialTask, editTasks, initialParentTaskId));
         setFormErrors({});
         setDirtyFields(new Set());
     }
@@ -347,6 +353,14 @@ export default function TaskForm(props) {
 
     function handleOpenProjectManager() {
         setIsProjectManagerOpen(true);
+    }
+
+    function handleCopyTaskId() {
+        if (isCopyTaskIdDisabled || !navigator.clipboard) {
+            return;
+        }
+
+        void navigator.clipboard.writeText(initialTask.id).catch(function ignoreCopyError() {});
     }
 
     function handleCloseProjectManager() {
@@ -588,6 +602,7 @@ export default function TaskForm(props) {
                             isBulkEditMode,
                         )}
                         fullWidth
+                        disabled={isParentTask}
                         onChange={handleFieldChange}
                     />
                 ) : (
@@ -611,6 +626,7 @@ export default function TaskForm(props) {
                                 isBulkEditMode,
                             )}
                             fullWidth
+                            disabled={isParentTask}
                             onChange={handleFieldChange}
                         />
                         <PlannerDateField
@@ -634,6 +650,7 @@ export default function TaskForm(props) {
                                 )
                             }
                             fullWidth
+                            disabled={isParentTask}
                             onChange={handleFieldChange}
                         />
                     </Box>
@@ -655,6 +672,7 @@ export default function TaskForm(props) {
                                 max={100}
                                 step={PROGRESS_SLIDER_STEP}
                                 size="small"
+                                disabled={isParentTask}
                                 onChange={handleProgressChange}
                             />
                         </Box>
@@ -675,6 +693,34 @@ export default function TaskForm(props) {
                         )}
                     </Box>
                 )}
+                <Box className="assignee-field-row">
+                    <TextField
+                        label="Parent task"
+                        name="parentTaskId"
+                        value={formValues.parentTaskId}
+                        helperText={getFieldHelperText(
+                            "parentTaskId",
+                            formErrors,
+                            mixedFields,
+                            dirtyFields,
+                        )}
+                        fullWidth
+                        onFocus={handleMixedTextFocus}
+                        onChange={handleFieldChange}
+                    />
+                    <Tooltip title="Copy task id">
+                        <span>
+                            <IconButton
+                                className="assignee-manager-button"
+                                aria-label="Copy task id"
+                                disabled={isCopyTaskIdDisabled}
+                                onClick={handleCopyTaskId}
+                            >
+                                <ContentCopyOutlinedIcon fontSize="small" />
+                            </IconButton>
+                        </span>
+                    </Tooltip>
+                </Box>
                 {formErrors.subTasks && (
                     <Typography variant="caption" color="error">
                         {formErrors.subTasks}
@@ -831,7 +877,7 @@ function validateBulkForm(formValues, dirtyFields, tasks) {
 }
 
 
-function getInitialFormValuesForMode(initialTask, editTasks) {
+function getInitialFormValuesForMode(initialTask, editTasks, initialParentTaskId) {
     if (editTasks.length > 1) {
         return getBulkInitialFormValues(editTasks);
     }
@@ -840,7 +886,10 @@ function getInitialFormValuesForMode(initialTask, editTasks) {
         return getInitialFormValues(editTasks[0]);
     }
 
-    return getInitialFormValues(initialTask);
+    return {
+        ...getInitialFormValues(initialTask),
+        parentTaskId: initialParentTaskId,
+    };
 }
 
 
@@ -950,6 +999,7 @@ function getInitialFormValues(task) {
         progressPercent: isReleaseTask
             ? 100
             : task.progressPercent || 0,
+        parentTaskId: task.parentTaskId || "",
         subTasks: isMultiPhase ? (task.subTasks || []) : [],
     };
 }
@@ -985,6 +1035,7 @@ function normalizeTaskDraft(formValues) {
             projectName: formValues.projectName,
             taskType: MULTI_PHASE_TASK_TYPE,
             taskLevel: DEFAULT_TASK_LEVEL,
+            parentTaskId: formValues.parentTaskId.trim(),
             subTasks: sortedSubTasks,
             ...computed,
         };
@@ -1007,6 +1058,7 @@ function normalizeTaskDraft(formValues) {
         progressPercent: formValues.taskType === RELEASE_TASK_TYPE
             ? 100
             : formValues.progressPercent,
+        parentTaskId: formValues.parentTaskId.trim(),
     };
 }
 
@@ -1243,10 +1295,6 @@ function getFieldHelperText(fieldName, formErrors, mixedFields, dirtyFields) {
         return formErrors[fieldName];
     }
 
-    if (mixedFields.has(fieldName) && !dirtyFields.has(fieldName)) {
-        return "Mixed values";
-    }
-
     return "";
 }
 
@@ -1266,7 +1314,7 @@ function isRequiredField(fieldName, mixedFields, dirtyFields, isBulkEditMode) {
 
 function formatProgressValue(value, hasMixedProgress = false, hasDirtyProgress = true) {
     if (hasMixedProgress && !hasDirtyProgress) {
-        return "Mixed";
+        return "0%";
     }
 
     return `${value}%`;

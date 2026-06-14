@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import AddIcon from "@mui/icons-material/Add";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import FilterAltIcon from "@mui/icons-material/FilterAlt";
 import {
     Avatar,
@@ -25,6 +28,11 @@ import {
     getTaskListColumnsMinimumWidth,
     getTaskListColumnDisplayValue,
 } from "../utils/taskListColumns";
+import {
+    canTaskHaveChildTasks,
+    getTaskDepth,
+    hasTaskChildren,
+} from "../utils/taskHierarchy";
 
 
 const UNASSIGNED_ASSIGNEE_LABEL = "Unassigned";
@@ -43,6 +51,7 @@ const ASSIGNEE_AVATAR_COLORS = [
 const LEFT_MOUSE_BUTTON = 0;
 const TASK_LIST_DRAG_THRESHOLD_PIXELS = 4;
 const TASK_LIST_DRAG_TYPE_ROW_SELECT = "task-list-row-select";
+const TASK_HIERARCHY_INDENT_PIXELS = 20;
 
 
 export default function TaskList(props) {
@@ -59,7 +68,9 @@ export default function TaskList(props) {
         selectedFiltersByColumn = {},
         selectedTaskIds,
         sortState,
+        collapsedParentTaskIds = [],
         headerHeight,
+        onAddChildTask,
         onColumnVisibilityToggle,
         onClearHighlight,
         onFilterToggle,
@@ -72,6 +83,7 @@ export default function TaskList(props) {
         onSelectTask,
         onSelectTasks,
         onSortToggle,
+        onParentTaskCollapseToggle,
     } = props;
     const dragStateRef = useRef(null);
     const suppressNextRowClickRef = useRef(false);
@@ -95,6 +107,9 @@ export default function TaskList(props) {
     const activeSelectedFilters = activeFilterColumn
         ? selectedFiltersByColumn[activeFilterColumn.id] || []
         : [];
+    const collapsedParentTaskIdSet = useMemo(function memoizeCollapsedParentTaskIds() {
+        return new Set(collapsedParentTaskIds);
+    }, [collapsedParentTaskIds]);
     const gridTemplateColumns = getTaskListGridTemplateColumns(columns);
     const gridMinimumWidth = getTaskListColumnsMinimumWidth(columns);
     const taskListGridStyle = {
@@ -511,6 +526,13 @@ export default function TaskList(props) {
                                             task={task}
                                             column={column}
                                             assigneeColorMap={assigneeColorMap}
+                                            isCollapsed={
+                                                collapsedParentTaskIdSet.has(task.id)
+                                            }
+                                            onAddChildTask={onAddChildTask}
+                                            onParentTaskCollapseToggle={
+                                                onParentTaskCollapseToggle
+                                            }
                                         />
                                     );
                                 })}
@@ -609,6 +631,9 @@ function TaskListCell(props) {
     const {
         assigneeColorMap,
         column,
+        isCollapsed,
+        onAddChildTask,
+        onParentTaskCollapseToggle,
         task,
     } = props;
 
@@ -616,9 +641,37 @@ function TaskListCell(props) {
         const assigneeLabel = getTaskAssigneeLabel(task);
         const avatarInitials = getAssigneeInitials(assigneeLabel);
         const avatarTitle = getAssigneeAvatarTitle(assigneeLabel);
+        const taskDepth = getTaskDepth(task);
+        const canAddChildTask = canTaskHaveChildTasks(task);
+        const hasChildren = Boolean(task.__hasChildTasks) || hasTaskChildren(task);
 
         return (
-            <Box className="task-list-cell task-list-name-cell">
+            <Box
+                className="task-list-cell task-list-name-cell"
+                sx={{
+                    paddingLeft: `${10 + taskDepth * TASK_HIERARCHY_INDENT_PIXELS}px`,
+                }}
+            >
+                <Box className="task-list-hierarchy-button-slot">
+                    {hasChildren && (
+                        <IconButton
+                            size="small"
+                            className="task-list-hierarchy-button"
+                            aria-label={isCollapsed ? "Show child tasks" : "Hide child tasks"}
+                            onMouseDown={stopTaskRowButtonEvent}
+                            onClick={function toggleParentTaskCollapse(event) {
+                                stopTaskRowButtonEvent(event);
+                                onParentTaskCollapseToggle(task.id);
+                            }}
+                        >
+                            {isCollapsed ? (
+                                <ExpandMoreIcon fontSize="inherit" />
+                            ) : (
+                                <ExpandLessIcon fontSize="inherit" />
+                            )}
+                        </IconButton>
+                    )}
+                </Box>
                 {/* MUI Avatar keeps task identity compact within the fixed task row height. */}
                 <Avatar
                     className="task-assignee-avatar"
@@ -636,6 +689,22 @@ function TaskListCell(props) {
                 <Typography className="task-list-name" title={task.name}>
                     {task.name}
                 </Typography>
+                <Box className="task-list-hierarchy-button-slot task-list-add-child-slot">
+                    {canAddChildTask && (
+                        <IconButton
+                            size="small"
+                            className="task-list-hierarchy-button"
+                            aria-label={`Add child task to ${task.name}`}
+                            onMouseDown={stopTaskRowButtonEvent}
+                            onClick={function addChildTask(event) {
+                                stopTaskRowButtonEvent(event);
+                                onAddChildTask(task.id);
+                            }}
+                        >
+                            <AddIcon fontSize="inherit" />
+                        </IconButton>
+                    )}
+                </Box>
             </Box>
         );
     }
@@ -649,6 +718,12 @@ function TaskListCell(props) {
             </Typography>
         </Box>
     );
+}
+
+
+function stopTaskRowButtonEvent(event) {
+    event.preventDefault();
+    event.stopPropagation();
 }
 
 

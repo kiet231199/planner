@@ -32,6 +32,16 @@ import {
     sortSubTasksByStartDate,
 } from "./utils/subTasks";
 import {
+    cloneTasksWithHierarchyIds,
+    getParentTaskId,
+    getTaskIdsWithDescendants,
+    getTaskTreeIds,
+    isValidParentTaskId,
+    normalizeTaskHierarchy,
+    setTaskParentId,
+    setTaskParentIdAtIndex,
+} from "./utils/taskHierarchy";
+import {
     DAY_OFF_ALL_ASSIGNEES,
     DEFAULT_TASK_LEVEL,
     MULTI_PHASE_TASK_TYPE,
@@ -129,6 +139,7 @@ export default function App() {
     const [copiedSubTask, setCopiedSubTask] = useState(null);
     const [cutSubTaskInfo, setCutSubTaskInfo] = useState(null);
     const [subTaskEditRequest, setSubTaskEditRequest] = useState(null);
+    const [initialParentTaskId, setInitialParentTaskId] = useState("");
     const [drawerMode, setDrawerMode] = useState("create");
     const [dayOffDrawerMode, setDayOffDrawerMode] = useState("create");
     const [isLoading, setIsLoading] = useState(true);
@@ -482,54 +493,37 @@ export default function App() {
                 throw tasksResult.reason;
             }
 
-            const loadedTasks = tasksResult.value;
+            const loadedPlannerData = {
+                tasks: tasksResult.value,
+                dayOffs: dayOffsResult.status === "fulfilled"
+                    ? dayOffsResult.value
+                    : [],
+                assignees: assigneesResult.status === "fulfilled"
+                    ? assigneesResult.value
+                    : [],
+                project_name: projectNamesResult.status === "fulfilled"
+                    ? projectNamesResult.value
+                    : [],
+                dependency: dependencyResult.status === "fulfilled"
+                    ? dependencyResult.value
+                    : [],
+            };
 
-            tasksRef.current = loadedTasks;
-            setTasks(loadedTasks);
-            clearMissingSelection(loadedTasks);
+            applyPlannerData(loadedPlannerData);
 
-            if (dayOffsResult.status === "fulfilled") {
-                const loadedDayOffs = dayOffsResult.value;
-
-                dayOffsRef.current = loadedDayOffs;
-                setDayOffs(loadedDayOffs);
-            } else {
-                dayOffsRef.current = [];
-                setDayOffs([]);
+            if (dayOffsResult.status === "rejected") {
                 setErrorMessage(getDayOffLoadErrorMessage(dayOffsResult.reason));
             }
 
-            if (assigneesResult.status === "fulfilled") {
-                const loadedAssignees = assigneesResult.value;
-
-                assigneesRef.current = loadedAssignees;
-                setAssignees(loadedAssignees);
-            } else {
-                assigneesRef.current = [];
-                setAssignees([]);
+            if (assigneesResult.status === "rejected") {
                 setErrorMessage(getAssigneeLoadErrorMessage(assigneesResult.reason));
             }
 
-            if (projectNamesResult.status === "fulfilled") {
-                const loadedProjectNames = projectNamesResult.value;
-
-                projectNamesRef.current = loadedProjectNames;
-                setProjectNames(loadedProjectNames);
-            } else {
-                projectNamesRef.current = [];
-                setProjectNames([]);
+            if (projectNamesResult.status === "rejected") {
                 setErrorMessage(getProjectNamesLoadErrorMessage(projectNamesResult.reason));
             }
 
-            if (dependencyResult.status === "fulfilled") {
-                const loadedDependency = cloneDependency(dependencyResult.value);
-
-                dependencyRef.current = loadedDependency;
-                setDependency(loadedDependency);
-                clearMissingDependencySelection(loadedDependency);
-            } else {
-                dependencyRef.current = [];
-                setDependency([]);
+            if (dependencyResult.status === "rejected") {
                 setErrorMessage(getDependencyLoadErrorMessage(dependencyResult.reason));
             }
         } catch (error) {
@@ -543,11 +537,21 @@ export default function App() {
         const beforeTasks = tasksRef.current;
         const beforeSelectedTaskIds = selectedTaskIdsRef.current;
         const afterTaskId = getLastSelectedTaskId(beforeSelectedTaskIds);
+        const parentTaskId = getTaskDraftParentTaskId(taskDraft);
         const createdTask = {
             id: createClientTaskId(),
-            ...taskDraft,
+            ...getTaskDraftValues(taskDraft),
         };
-        const afterTasks = insertTaskAfter(beforeTasks, createdTask, afterTaskId);
+        let afterTasks = insertTaskAfter(beforeTasks, createdTask, afterTaskId);
+
+        if (!validateParentTaskChange(afterTasks, createdTask.id, parentTaskId)) {
+            return false;
+        }
+
+        if (parentTaskId) {
+            afterTasks = setTaskParentId(afterTasks, [createdTask.id], parentTaskId);
+        }
+
         const afterSelectedTaskIds = [createdTask.id];
 
         commitTaskChange(
@@ -558,6 +562,7 @@ export default function App() {
             "Add task",
         );
         setSubTaskEditRequest(null);
+        setInitialParentTaskId("");
         setIsDrawerOpen(false);
 
         return true;
@@ -580,12 +585,19 @@ export default function App() {
             return false;
         }
 
+        const parentTaskId = getTaskDraftParentTaskId(taskDraft);
         const updatedTask = {
             ...currentTask,
-            ...taskDraft,
+            ...getTaskDraftValues(taskDraft),
             id: taskId,
         };
-        const afterTasks = replaceTaskById(beforeTasks, updatedTask);
+        let afterTasks = replaceTaskById(beforeTasks, updatedTask);
+
+        if (!validateParentTaskChange(afterTasks, taskId, parentTaskId)) {
+            return false;
+        }
+
+        afterTasks = setTaskParentId(afterTasks, [taskId], parentTaskId);
         const afterSelectedTaskIds = [taskId];
 
         if (hasSameTaskList(beforeTasks, afterTasks)) {
@@ -602,6 +614,7 @@ export default function App() {
             "Edit task",
         );
         setSubTaskEditRequest(null);
+        setInitialParentTaskId("");
         setIsDrawerOpen(false);
 
         return true;
@@ -621,14 +634,24 @@ export default function App() {
             return true;
         }
 
+        const parentTaskId = getTaskPatchParentTaskId(taskPatch);
+        const taskValuesPatch = getTaskDraftValues(taskPatch);
         const selectedTaskIdSet = new Set(beforeSelectedTaskIds);
-        const afterTasks = beforeTasks.map(function updateSelectedTask(task) {
+        let afterTasks = beforeTasks.map(function updateSelectedTask(task) {
             if (!selectedTaskIdSet.has(task.id)) {
                 return task;
             }
 
-            return applyBulkTaskPatch(task, taskPatch);
+            return applyBulkTaskPatch(task, taskValuesPatch);
         });
+
+        if (parentTaskId !== null) {
+            if (!validateBulkParentTaskChange(afterTasks, beforeSelectedTaskIds, parentTaskId)) {
+                return false;
+            }
+
+            afterTasks = setTaskParentId(afterTasks, beforeSelectedTaskIds, parentTaskId);
+        }
 
         if (hasSameTaskList(beforeTasks, afterTasks)) {
             setSubTaskEditRequest(null);
@@ -644,13 +667,46 @@ export default function App() {
             "Edit tasks",
         );
         setSubTaskEditRequest(null);
+        setInitialParentTaskId("");
         setIsDrawerOpen(false);
 
         return true;
     }
 
-    async function handleMoveTasks(taskId, dayDelta, rowDelta, subTaskId = null) {
-        if (dayDelta === 0 && rowDelta === 0) {
+    function validateParentTaskChange(nextTasks, childTaskId, parentTaskId) {
+        if (isValidParentTaskId(nextTasks, childTaskId, parentTaskId)) {
+            return true;
+        }
+
+        setErrorMessage("Parent task must be an existing normal task and cannot create a cycle.");
+
+        return false;
+    }
+
+    function validateBulkParentTaskChange(nextTasks, childTaskIds, parentTaskId) {
+        const hasInvalidParentTask = childTaskIds.some(
+            function matchInvalidParentTask(childTaskId) {
+                return !isValidParentTaskId(nextTasks, childTaskId, parentTaskId);
+            },
+        );
+
+        if (!hasInvalidParentTask) {
+            return true;
+        }
+
+        setErrorMessage("Parent task must be valid for every selected task.");
+
+        return false;
+    }
+
+    async function handleMoveTasks(
+        taskId,
+        dayDelta,
+        rowDelta,
+        subTaskId = null,
+        dropTarget = null,
+    ) {
+        if (dayDelta === 0 && rowDelta === 0 && !dropTarget) {
             return;
         }
 
@@ -711,7 +767,47 @@ export default function App() {
         }
 
         const movingTaskIds = getMovingTaskIds(beforeTasks, beforeSelectedTaskIds, taskId);
-        const movedTasks = moveTasks(beforeTasks, movingTaskIds, taskId, dayDelta, rowDelta);
+        const movedRootTaskIds = getMovingRootTaskIds(beforeTasks, movingTaskIds);
+        let movedTasks = shiftTasksByDays(beforeTasks, movingTaskIds, dayDelta);
+
+        if (dropTarget?.type === "child" && dropTarget.targetTaskId) {
+            if (
+                !validateBulkParentTaskChange(
+                    movedTasks,
+                    movedRootTaskIds,
+                    dropTarget.targetTaskId,
+                )
+            ) {
+                return;
+            }
+
+            movedTasks = setTaskParentIdAtIndex(
+                movedTasks,
+                movedRootTaskIds,
+                dropTarget.targetTaskId,
+                dropTarget.childIndex,
+            );
+        } else if (dropTarget?.type === "swap" && dropTarget.targetTaskId) {
+            if (dropTarget.removeParentTask) {
+                movedTasks = moveTasksBeforeTask(
+                    movedTasks,
+                    movingTaskIds,
+                    dropTarget.targetTaskId,
+                );
+                movedTasks = setTaskParentId(movedTasks, movedRootTaskIds, "");
+            } else {
+                movedTasks = moveTasksToTaskIndex(
+                    movedTasks,
+                    movingTaskIds,
+                    dropTarget.targetTaskId,
+                );
+            }
+        } else if (dropTarget?.type === "detach") {
+            movedTasks = setTaskParentId(movedTasks, movedRootTaskIds, "");
+        } else if (rowDelta !== 0) {
+            movedTasks = reorderTasksByRowDelta(movedTasks, movingTaskIds, taskId, rowDelta);
+            movedTasks = setTaskParentId(movedTasks, movedRootTaskIds, "");
+        }
 
         if (hasSameTaskList(beforeTasks, movedTasks)) {
             return;
@@ -822,7 +918,9 @@ export default function App() {
             return;
         }
 
-        const deleteTaskIds = new Set(beforeSelectedTaskIds);
+        const deleteTaskIds = new Set(
+            getTaskIdsWithDescendants(beforeTasks, beforeSelectedTaskIds),
+        );
         const afterTasks = beforeTasks.filter(function keepTask(task) {
             return !deleteTaskIds.has(task.id);
         });
@@ -1188,6 +1286,14 @@ export default function App() {
 
     function handleAddTaskClick() {
         setSubTaskEditRequest(null);
+        setInitialParentTaskId("");
+        setDrawerMode("create");
+        setIsDrawerOpen(true);
+    }
+
+    function handleAddChildTaskClick(parentTaskId) {
+        setSubTaskEditRequest(null);
+        setInitialParentTaskId(parentTaskId);
         setDrawerMode("create");
         setIsDrawerOpen(true);
     }
@@ -1432,15 +1538,16 @@ export default function App() {
         selectedTaskIdsAfter,
         label,
     ) {
+        const normalizedAfterTasks = normalizeTaskHierarchy(afterTasks);
         const beforeDependency = dependencyRef.current;
-        const afterDependency = getExistingTaskDependency(afterTasks, beforeDependency);
+        const afterDependency = getExistingTaskDependency(normalizedAfterTasks, beforeDependency);
         const selectedDependencyIdsAfter = getExistingDependencyIds(
             selectedDependencyIdsRef.current,
             afterDependency,
         );
 
         if (
-            hasSameTaskList(beforeTasks, afterTasks)
+            hasSameTaskList(beforeTasks, normalizedAfterTasks)
             && hasSameTaskSelection(selectedTaskIdsBefore, selectedTaskIdsAfter)
             && hasSameDependencyList(beforeDependency, afterDependency)
             && hasSameStringList(selectedDependencyIdsRef.current, selectedDependencyIdsAfter)
@@ -1450,7 +1557,7 @@ export default function App() {
 
         const historyEntry = {
             beforeTasks: cloneTasks(beforeTasks),
-            afterTasks: cloneTasks(afterTasks),
+            afterTasks: cloneTasks(normalizedAfterTasks),
             beforeDayOffs: cloneDayOffs(dayOffsRef.current),
             afterDayOffs: cloneDayOffs(dayOffsRef.current),
             beforeDependency: cloneDependency(beforeDependency),
@@ -1467,7 +1574,7 @@ export default function App() {
         pushLimitedHistoryEntry(undoStackRef.current, historyEntry);
         redoStackRef.current = [];
         applyPlannerSnapshot(
-            afterTasks,
+            normalizedAfterTasks,
             dayOffsRef.current,
             afterDependency,
             selectedTaskIdsAfter,
@@ -1573,7 +1680,7 @@ export default function App() {
         nextSelectedDependencyIds,
         nextSelectedDayOffDates,
     ) {
-        const clonedTasks = cloneTasks(nextTasks);
+        const clonedTasks = normalizeTaskHierarchy(cloneTasks(nextTasks));
         const clonedDayOffs = cloneDayOffs(nextDayOffs);
         const clonedDependency = cloneDependency(nextDependency);
         const clonedSelectedTaskIds = [...nextSelectedTaskIds];
@@ -1595,7 +1702,7 @@ export default function App() {
     }
 
     function applyPlannerData(plannerData) {
-        const nextTasks = cloneTasks(plannerData.tasks);
+        const nextTasks = normalizeTaskHierarchy(cloneTasks(plannerData.tasks));
         const nextDayOffs = cloneDayOffs(plannerData.dayOffs);
         const nextAssignees = cloneAssignees(plannerData.assignees);
         const nextProjectNames = cloneProjectNames(plannerData.project_name || []);
@@ -1700,9 +1807,12 @@ export default function App() {
 
     function handleSelectTask(taskId, selectionMode = getDefaultSelectionMode(), taskOrder = []) {
         const taskOrderIds = getTaskOrderIds(taskOrder, tasksRef.current);
-        const nextTaskIds = getNextSelectedTaskIds(
+        const taskTreeIds = getTaskTreeIds(tasksRef.current, taskId);
+        const nextTaskIds = getNextSelectedTaskIdsForHierarchy(
+            tasksRef.current,
             selectedTaskIdsRef.current,
             taskId,
+            taskTreeIds,
             selectionMode,
             lastSelectedTaskIdRef.current,
             taskOrderIds,
@@ -1720,9 +1830,10 @@ export default function App() {
 
     function handleSelectTasks(taskIds, selectionMode = getDefaultSelectionMode(), taskOrder = []) {
         const taskOrderIds = getTaskOrderIds(taskOrder, tasksRef.current);
+        const hierarchyTaskIds = getTaskIdsWithDescendants(tasksRef.current, taskIds);
         const nextTaskIds = getNextBulkSelectedTaskIds(
             selectedTaskIdsRef.current,
-            taskIds,
+            hierarchyTaskIds,
             selectionMode,
             taskOrderIds,
         );
@@ -1944,10 +2055,14 @@ export default function App() {
     }
 
     const selectedTaskId = getLastSelectedTaskId(selectedTaskIds);
-    const selectedTask = tasks.find(function matchSelectedTask(task) {
+    const selectedTaskWithoutParentId = tasks.find(function matchSelectedTask(task) {
         return task.id === selectedTaskId;
     }) || null;
-    const selectedTasks = getTasksByIdsInTaskOrder(tasks, selectedTaskIds);
+    const selectedTask = getTaskWithParentTaskId(tasks, selectedTaskWithoutParentId);
+    const selectedTasks = getTasksByIdsInTaskOrder(tasks, selectedTaskIds)
+        .map(function mapSelectedTaskParentId(task) {
+            return getTaskWithParentTaskId(tasks, task);
+        });
     const canEditSelectedTask = selectedTaskIds.length > 0
         && !hasMixedMultiPhaseAndNormalSelection(tasks, selectedTaskIds);
     const canCopySelectedTasks = selectedTaskIds.length > 0;
@@ -1991,9 +2106,11 @@ export default function App() {
                     showTimelineHorizontalGridLines={showTimelineHorizontalGridLines}
                     selectedTask={selectedTask}
                     selectedTasks={selectedTasks}
+                    initialParentTaskId={initialParentTaskId}
                     subTaskEditRequest={subTaskEditRequest}
                     zoomIndex={zoomIndex}
                     zoomMode={zoomMode}
+                    onAddChildTask={handleAddChildTaskClick}
                     onAddTaskClick={handleAddTaskClick}
                     onCreateDayOffs={handleCreateDayOffs}
                     onDayOffActionClick={handleDayOffActionClick}
@@ -2005,6 +2122,7 @@ export default function App() {
                     }
                     onDrawerClose={function closeDrawer() {
                         setSubTaskEditRequest(null);
+                        setInitialParentTaskId("");
                         setIsDrawerOpen(false);
                     }}
                     onCreateTask={handleCreateTask}
@@ -2442,11 +2560,23 @@ function pushLimitedHistoryEntry(historyStack, historyEntry) {
 
 function cloneTasks(tasks) {
     return tasks.map(function cloneTask(task) {
-        const cloned = { ...task };
+        const {
+            parentTaskId: _removedParentTaskId,
+            __hierarchyDepth: _removedHierarchyDepth,
+            __hasChildTasks: _removedHasChildTasks,
+            ...taskValues
+        } = task;
+        const cloned = { ...taskValues };
 
         if (task.subTasks) {
             cloned.subTasks = task.subTasks.map(function cloneSubTask(st) {
                 return { ...st };
+            });
+        }
+
+        if (task.childTasks) {
+            cloned.childTasks = task.childTasks.map(function cloneChildTask(childTask) {
+                return { ...childTask };
             });
         }
 
@@ -2456,12 +2586,7 @@ function cloneTasks(tasks) {
 
 
 function cloneTasksWithNewIds(tasks) {
-    return tasks.map(function cloneTaskWithNewId(task) {
-        return {
-            ...task,
-            id: createClientTaskId(),
-        };
-    });
+    return cloneTasksWithHierarchyIds(tasks, createClientTaskId);
 }
 
 
@@ -2779,6 +2904,41 @@ function getNextSelectedTaskIds(
 }
 
 
+function getNextSelectedTaskIdsForHierarchy(
+    tasks,
+    currentTaskIds,
+    taskId,
+    taskTreeIds,
+    selectionMode,
+    anchorTaskId,
+    taskOrderIds,
+) {
+    if (selectionMode.isRangeSelect) {
+        return getTaskIdsWithDescendants(
+            tasks,
+            getNextSelectedTaskIds(
+                currentTaskIds,
+                taskId,
+                selectionMode,
+                anchorTaskId,
+                taskOrderIds,
+            ),
+        );
+    }
+
+    if (selectionMode.isMultiSelect) {
+        return getNextBulkSelectedTaskIds(
+            currentTaskIds,
+            taskTreeIds,
+            selectionMode,
+            taskOrderIds,
+        );
+    }
+
+    return sortTaskIdsByTaskOrder(taskTreeIds, taskOrderIds);
+}
+
+
 function getNextBulkSelectedTaskIds(
     currentTaskIds,
     taskIds,
@@ -2868,16 +3028,35 @@ function sortTaskIdsByTaskOrder(taskIds, taskOrderIds) {
 
 function getMovingTaskIds(tasks, selectedTaskIds, taskId) {
     if (!selectedTaskIds.includes(taskId)) {
-        return [taskId];
+        return getTaskTreeIds(tasks, taskId);
     }
 
-    return tasks
+    const parentTaskId = getParentTaskId(tasks, taskId);
+
+    if (parentTaskId && selectedTaskIds.includes(parentTaskId)) {
+        return getTaskTreeIds(tasks, taskId);
+    }
+
+    const selectedTaskIdsInOrder = tasks
         .filter(function matchSelectedTask(task) {
             return selectedTaskIds.includes(task.id);
         })
         .map(function mapTaskId(task) {
             return task.id;
         });
+
+    return getTaskIdsWithDescendants(tasks, selectedTaskIdsInOrder);
+}
+
+
+function getMovingRootTaskIds(tasks, movingTaskIds) {
+    const movingTaskIdSet = new Set(movingTaskIds);
+
+    return movingTaskIds.filter(function keepMovingRootTaskId(movingTaskId) {
+        const parentTaskId = getParentTaskId(tasks, movingTaskId);
+
+        return !parentTaskId || !movingTaskIdSet.has(parentTaskId);
+    });
 }
 
 
@@ -3033,6 +3212,51 @@ function getResizedTask(task, resizeEdge, dayDelta) {
 }
 
 
+function getTaskDraftParentTaskId(taskDraft) {
+    if (!hasOwnProperty(taskDraft, "parentTaskId")) {
+        return "";
+    }
+
+    return (taskDraft.parentTaskId || "").trim();
+}
+
+
+function getTaskPatchParentTaskId(taskPatch) {
+    if (!hasOwnProperty(taskPatch, "parentTaskId")) {
+        return null;
+    }
+
+    return (taskPatch.parentTaskId || "").trim();
+}
+
+
+function getTaskDraftValues(taskDraft) {
+    const {
+        parentTaskId: _removedParentTaskId,
+        ...taskValues
+    } = taskDraft;
+
+    return taskValues;
+}
+
+
+function getTaskWithParentTaskId(tasks, task) {
+    if (!task) {
+        return null;
+    }
+
+    return {
+        ...task,
+        parentTaskId: getParentTaskId(tasks, task.id) || "",
+    };
+}
+
+
+function hasOwnProperty(value, propertyName) {
+    return Object.prototype.hasOwnProperty.call(value, propertyName);
+}
+
+
 function getClampedStartDate(startDate, stopDate) {
     if (startDate > stopDate) {
         return stopDate;
@@ -3111,6 +3335,71 @@ function moveTasksAfterTask(tasks, movingTaskIds, afterTaskId) {
         ...movingTasks,
         ...remainingTasks.slice(targetTaskIndex + 1),
     ];
+}
+
+
+function moveTasksBeforeTask(tasks, movingTaskIds, beforeTaskId) {
+    if (movingTaskIds.length === 0 || !beforeTaskId) {
+        return tasks;
+    }
+
+    const movingTaskIdSet = new Set(movingTaskIds);
+    const movingTasks = tasks.filter(function matchMovingTask(task) {
+        return movingTaskIdSet.has(task.id);
+    });
+    const remainingTasks = tasks.filter(function matchRemainingTask(task) {
+        return !movingTaskIdSet.has(task.id);
+    });
+
+    if (movingTasks.length === 0) {
+        return tasks;
+    }
+
+    const targetTaskIndex = remainingTasks.findIndex(function matchTargetTask(task) {
+        return task.id === beforeTaskId;
+    });
+
+    if (targetTaskIndex < 0) {
+        return tasks;
+    }
+
+    return [
+        ...remainingTasks.slice(0, targetTaskIndex),
+        ...movingTasks,
+        ...remainingTasks.slice(targetTaskIndex),
+    ];
+}
+
+
+function moveTasksToTaskIndex(tasks, movingTaskIds, targetTaskId) {
+    const targetIndex = tasks.findIndex(function matchTargetTask(task) {
+        return task.id === targetTaskId;
+    });
+
+    if (targetIndex < 0) {
+        return tasks;
+    }
+
+    const sourceTopIndex = getMovingTaskTopIndex(tasks, movingTaskIds);
+
+    if (sourceTopIndex < 0) {
+        return tasks;
+    }
+
+    if (sourceTopIndex < targetIndex) {
+        return moveTasksAfterTask(tasks, movingTaskIds, targetTaskId);
+    }
+
+    return moveTasksBeforeTask(tasks, movingTaskIds, targetTaskId);
+}
+
+
+function getMovingTaskTopIndex(tasks, movingTaskIds) {
+    const movingTaskIdSet = new Set(movingTaskIds);
+
+    return tasks.findIndex(function matchMovingTask(task) {
+        return movingTaskIdSet.has(task.id);
+    });
 }
 
 
@@ -3312,6 +3601,20 @@ function hasSameSubTasks(aSubTasks, bSubTasks) {
 }
 
 
+function hasSameChildTasks(aChildTasks, bChildTasks) {
+    const aList = aChildTasks || [];
+    const bList = bChildTasks || [];
+
+    if (aList.length !== bList.length) {
+        return false;
+    }
+
+    return aList.every(function matchChildTask(childTask, index) {
+        return childTask.id === bList[index].id;
+    });
+}
+
+
 function hasSameTaskValues(task, expectedTask) {
     return (
         task.name === expectedTask.name
@@ -3325,6 +3628,7 @@ function hasSameTaskValues(task, expectedTask) {
         && task.stopDate === expectedTask.stopDate
         && task.progressPercent === expectedTask.progressPercent
         && hasSameSubTasks(task.subTasks, expectedTask.subTasks)
+        && hasSameChildTasks(task.childTasks, expectedTask.childTasks)
     );
 }
 

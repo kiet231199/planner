@@ -23,6 +23,9 @@ import {
     getTaskListColumnsMinimumWidth,
     getTaskListColumnValue,
 } from "../utils/taskListColumns";
+import {
+    getTaskHierarchyInfo,
+} from "../utils/taskHierarchy";
 
 
 const TASK_LIST_WIDTH_STORAGE_KEY = "planner-task-list-width";
@@ -66,6 +69,7 @@ export default function PlannerShell(props) {
         selectedDayOffDates,
         selectedTask,
         selectedTasks,
+        initialParentTaskId,
         subTaskEditRequest,
         isDrawerOpen,
         isDayOffDrawerOpen,
@@ -89,6 +93,7 @@ export default function PlannerShell(props) {
         showTimelineHorizontalGridLines,
         zoomIndex,
         zoomMode,
+        onAddChildTask,
         onAddTaskClick,
         onCreateDayOffs,
         onDayOffActionClick,
@@ -137,6 +142,7 @@ export default function PlannerShell(props) {
     const [selectedTaskListFilters, setSelectedTaskListFilters] = useState({});
     const [taskListSort, setTaskListSort] = useState(EMPTY_TASK_LIST_SORT);
     const [highlightedTaskId, setHighlightedTaskId] = useState(null);
+    const [collapsedParentTaskIds, setCollapsedParentTaskIds] = useState([]);
     const isSyncingScrollRef = useRef(false);
     const shellRef = useRef(null);
     const shellResizeFrameIdRef = useRef(null);
@@ -155,12 +161,13 @@ export default function PlannerShell(props) {
         return getFilterOptionsByColumn(tasks, visibleTaskListColumns);
     }, [tasks, visibleTaskListColumns]);
     const displayedTasks = useMemo(function memoizeDisplayedTasks() {
-        return getDisplayedTasks(tasks, selectedTaskListFilters, taskListSort);
-    }, [tasks, selectedTaskListFilters, taskListSort]);
-    const isTaskViewFilteredOrSorted = (
-        hasActiveTaskListFilters(selectedTaskListFilters)
-        || taskListSort.direction !== TASK_LIST_SORT_NONE
-    );
+        return getDisplayedTasks(
+            tasks,
+            selectedTaskListFilters,
+            taskListSort,
+            collapsedParentTaskIds,
+        );
+    }, [collapsedParentTaskIds, tasks, selectedTaskListFilters, taskListSort]);
     const isCompactLayout = isCompactPlannerLayout(shellSize.width);
     const isShortViewport = isShortPlannerViewport(shellSize.height);
     const isEffectiveTaskListCollapsed = getEffectiveTaskListCollapsed(
@@ -527,6 +534,18 @@ export default function PlannerShell(props) {
         });
     }
 
+    function handleParentTaskCollapseToggle(taskId) {
+        setCollapsedParentTaskIds(function updateCollapsedParentTaskIds(currentTaskIds) {
+            if (currentTaskIds.includes(taskId)) {
+                return currentTaskIds.filter(function keepOtherTaskId(currentTaskId) {
+                    return currentTaskId !== taskId;
+                });
+            }
+
+            return [...currentTaskIds, taskId];
+        });
+    }
+
     function handleTaskListColumnVisibilityToggle(columnId) {
         const column = getTaskListColumn(columnId);
 
@@ -681,7 +700,9 @@ export default function PlannerShell(props) {
                     selectedFiltersByColumn={selectedTaskListFilters}
                     selectedTaskIds={selectedTaskIds}
                     sortState={taskListSort}
+                    collapsedParentTaskIds={collapsedParentTaskIds}
                     headerHeight={timelineHeaderHeight}
+                    onAddChildTask={onAddChildTask}
                     onColumnVisibilityToggle={handleTaskListColumnVisibilityToggle}
                     onClearHighlight={handleClearTaskHighlight}
                     onFilterToggle={handleTaskListFilterToggle}
@@ -694,6 +715,7 @@ export default function PlannerShell(props) {
                     onSelectTask={onSelectTask}
                     onSelectTasks={onSelectTasks}
                     onSortToggle={handleTaskListSortToggle}
+                    onParentTaskCollapseToggle={handleParentTaskCollapseToggle}
                 />
                 <TimelineChart
                     panelRef={timelinePanelRef}
@@ -706,7 +728,7 @@ export default function PlannerShell(props) {
                     selectedSubTasks={selectedSubTasks}
                     highlightedTaskId={timelineHighlightedTaskId}
                     isLoading={isLoading}
-                    isRowReorderDisabled={isTaskViewFilteredOrSorted}
+                    isRowReorderDisabled={false}
                     selectedDayOffDates={selectedDayOffDates}
                     selectedDependencyIds={selectedDependencyIds}
                     selectedTaskIds={selectedTaskIds}
@@ -740,6 +762,7 @@ export default function PlannerShell(props) {
                 mode={drawerMode}
                 task={selectedTask}
                 tasks={selectedTasks}
+                initialParentTaskId={initialParentTaskId}
                 subTaskEditRequest={subTaskEditRequest}
                 onClose={onDrawerClose}
                 onCreateTask={onCreateTask}
@@ -982,37 +1005,175 @@ function getFilterOptionsByColumn(tasks, visibleColumns) {
 }
 
 
-function getDisplayedTasks(tasks, selectedFiltersByColumn, sortState) {
-    const indexedTasks = tasks.map(function mapIndexedTask(task, index) {
-        return {
-            index,
-            task,
-        };
-    });
-    const filteredTasks = getFilteredIndexedTasks(indexedTasks, selectedFiltersByColumn);
-
-    if (!sortState.columnId || sortState.direction === TASK_LIST_SORT_NONE) {
-        return filteredTasks.map(function mapFilteredTask(indexedTask) {
-            return indexedTask.task;
+function getDisplayedTasks(
+    tasks,
+    selectedFiltersByColumn,
+    sortState,
+    collapsedParentTaskIds,
+) {
+    const hierarchyInfo = getTaskHierarchyInfo(tasks);
+    const taskIndexById = new Map(tasks.map(function mapTaskIndex(task, index) {
+        return [task.id, index];
+    }));
+    const activeFilters = getActiveTaskListFilters(selectedFiltersByColumn);
+    const treeNodes = hierarchyInfo.topLevelTasks
+        .map(function mapTaskTree(task) {
+            return getDisplayedTaskTreeNode(
+                task,
+                hierarchyInfo.childrenByParentId,
+                activeFilters,
+                false,
+            );
+        })
+        .filter(function keepTaskTreeNode(treeNode) {
+            return Boolean(treeNode);
         });
-    }
+    const sortedTreeNodes = sortTaskTreeNodes(treeNodes, sortState, taskIndexById);
+    const collapsedParentTaskIdSet = new Set(collapsedParentTaskIds);
+    const displayedTasks = [];
 
-    const sortedTasks = [...filteredTasks].sort(function compareIndexedTasks(first, second) {
-        return compareIndexedTasksBySort(first, second, sortState);
+    sortedTreeNodes.forEach(function appendTopLevelTaskNode(treeNode) {
+        appendDisplayedTaskTreeNode(
+            treeNode,
+            0,
+            collapsedParentTaskIdSet,
+            displayedTasks,
+        );
     });
 
-    return sortedTasks.map(function mapSortedTask(indexedTask) {
-        return indexedTask.task;
-    });
+    return displayedTasks;
 }
 
 
-function getFilteredIndexedTasks(indexedTasks, selectedFiltersByColumn) {
+function getActiveTaskListFilters(selectedFiltersByColumn) {
     const activeFilters = Object.entries(selectedFiltersByColumn).filter(function hasFilters(
         [_columnId, filterValues],
     ) {
         return filterValues.length > 0;
     });
+
+    return activeFilters.map(function mapActiveFilter([columnId, filterValues]) {
+        return [columnId, new Set(filterValues)];
+    });
+}
+
+
+function getDisplayedTaskTreeNode(
+    task,
+    childrenByParentId,
+    activeFilters,
+    forceIncludeDescendants,
+) {
+    const childTasks = childrenByParentId.get(task.id) || [];
+    const selfMatches = forceIncludeDescendants || doesTaskMatchFilters(task, activeFilters);
+    const childTreeNodes = childTasks
+        .map(function mapChildTreeNode(childTask) {
+            return getDisplayedTaskTreeNode(
+                childTask,
+                childrenByParentId,
+                activeFilters,
+                selfMatches,
+            );
+        })
+        .filter(function keepChildTreeNode(treeNode) {
+            return Boolean(treeNode);
+        });
+
+    if (!selfMatches && childTreeNodes.length === 0) {
+        return null;
+    }
+
+    return {
+        task,
+        childTreeNodes,
+    };
+}
+
+
+function doesTaskMatchFilters(task, activeFilters) {
+    if (activeFilters.length === 0) {
+        return true;
+    }
+
+    return activeFilters.every(function matchColumnFilter([columnId, selectedValues]) {
+        const taskValue = String(getTaskListColumnValue(task, columnId));
+
+        return selectedValues.has(taskValue);
+    });
+}
+
+
+function sortTaskTreeNodes(treeNodes, sortState, taskIndexById) {
+    const sortedTreeNodes = treeNodes.map(function sortChildTreeNodes(treeNode) {
+        return {
+            ...treeNode,
+            childTreeNodes: sortTaskTreeNodes(
+                treeNode.childTreeNodes,
+                sortState,
+                taskIndexById,
+            ),
+        };
+    });
+
+    if (!sortState.columnId || sortState.direction === TASK_LIST_SORT_NONE) {
+        return sortedTreeNodes;
+    }
+
+    return [...sortedTreeNodes].sort(function compareTreeNodes(first, second) {
+        return compareTaskTreeNodesBySort(first, second, sortState, taskIndexById);
+    });
+}
+
+
+function appendDisplayedTaskTreeNode(
+    treeNode,
+    depth,
+    collapsedParentTaskIdSet,
+    displayedTasks,
+) {
+    displayedTasks.push({
+        ...treeNode.task,
+        __hierarchyDepth: depth,
+        __hasChildTasks: treeNode.childTreeNodes.length > 0,
+    });
+
+    if (collapsedParentTaskIdSet.has(treeNode.task.id)) {
+        return;
+    }
+
+    treeNode.childTreeNodes.forEach(function appendChildTaskTreeNode(childTreeNode) {
+        appendDisplayedTaskTreeNode(
+            childTreeNode,
+            depth + 1,
+            collapsedParentTaskIdSet,
+            displayedTasks,
+        );
+    });
+}
+
+
+function compareTaskTreeNodesBySort(first, second, sortState, taskIndexById) {
+    const firstTask = first.task;
+    const secondTask = second.task;
+    const firstIndex = taskIndexById.get(firstTask.id) || 0;
+    const secondIndex = taskIndexById.get(secondTask.id) || 0;
+
+    return compareIndexedTasksBySort(
+        {
+            index: firstIndex,
+            task: firstTask,
+        },
+        {
+            index: secondIndex,
+            task: secondTask,
+        },
+        sortState,
+    );
+}
+
+
+function getFilteredIndexedTasks(indexedTasks, selectedFiltersByColumn) {
+    const activeFilters = getActiveTaskListFilters(selectedFiltersByColumn);
 
     if (activeFilters.length === 0) {
         return indexedTasks;
@@ -1020,10 +1181,9 @@ function getFilteredIndexedTasks(indexedTasks, selectedFiltersByColumn) {
 
     return indexedTasks.filter(function matchSelectedFilters(indexedTask) {
         return activeFilters.every(function matchColumnFilter([columnId, filterValues]) {
-            const selectedValues = new Set(filterValues);
             const taskValue = String(getTaskListColumnValue(indexedTask.task, columnId));
 
-            return selectedValues.has(taskValue);
+            return filterValues.has(taskValue);
         });
     });
 }

@@ -20,6 +20,14 @@ import {
     RELEASE_TASK_TYPE,
     TASK_TYPE_COLORS,
 } from "../constants/taskOptions";
+import {
+    canTaskHaveChildTasks,
+    getParentTaskId,
+    getTaskDepth,
+    getTaskIdsWithDescendants,
+    getTaskTreeIds,
+    hasTaskChildren,
+} from "../utils/taskHierarchy";
 
 
 const LEFT_MOUSE_BUTTON = 0;
@@ -81,6 +89,11 @@ const EVENT_MARKER_SIZE_PIXELS = 34;
 const EVENT_MARKER_COLUMN_NORMAL = "normal";
 const EVENT_MARKER_COLUMN_WEEKEND = "weekend";
 const EVENT_MARKER_COLUMN_TODAY = "today";
+const TASK_DROP_TARGET_CHILD = "child";
+const TASK_DROP_TARGET_DETACH = "detach";
+const TASK_DROP_TARGET_SWAP = "swap";
+const DEPENDENCY_PATH_ROLE_HIT = "hit";
+const DEPENDENCY_PATH_ROLE_LINE = "line";
 const EVENT_FLAG_LIGHT_TEXT_COLOR = "#ffffff";
 const EVENT_FLAG_DARK_TEXT_COLOR = "#1f2937";
 const EVENT_FLAG_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
@@ -187,7 +200,12 @@ export default function TimelineChart(props) {
     const timelineBarsRef = useRef(null);
     const taskBarElementsRef = useRef(new Map());
     const subTaskBarElementsRef = useRef(new Map());
+    const dependencyPathElementsRef = useRef(new Map());
+    const dependencyLayoutsRef = useRef([]);
+    const dependencyLayoutFrameIdRef = useRef(null);
+    const pendingDependencyLayoutSyncOptionsRef = useRef(null);
     const dependencyPreviewRef = useRef(null);
+    const taskDropTargetSignatureRef = useRef("none");
     const taskDragPreviewTaskIdsRef = useRef([]);
     const taskHoverBubbleRef = useRef(null);
     const taskHoverBubbleTaskIdRef = useRef(null);
@@ -198,6 +216,7 @@ export default function TimelineChart(props) {
     const [panelHeight, setPanelHeight] = useState(0);
     const [selectionRectangle, setSelectionRectangle] = useState(null);
     const [taskDragPreview, setTaskDragPreview] = useState(null);
+    const [taskDropTarget, setTaskDropTarget] = useState(null);
     const [dependencyPreview, setDependencyPreview] = useState(null);
     const [dependencyLayouts, setDependencyLayouts] = useState([]);
     const [activeMultiTaskHandleTaskId, setActiveMultiTaskHandleTaskId] = useState(null);
@@ -334,6 +353,7 @@ export default function TimelineChart(props) {
         return function clearPendingTimelineWork() {
             cancelPanelSizeFrame();
             cancelTaskDragPreviewFrame();
+            cancelDependencyLayoutFrame();
             cancelTaskHoverFrame();
             cancelTimelinePanFrame();
             cancelTimelineZoomFrame();
@@ -341,26 +361,92 @@ export default function TimelineChart(props) {
             clearMoveTaskDragPreview();
             taskBarElementsRef.current.clear();
             subTaskBarElementsRef.current.clear();
+            dependencyPathElementsRef.current.clear();
         };
     }, []);
 
     useLayoutEffect(function keepDependencyLayoutsSynced() {
-        setDependencyLayouts(function updateCurrentDependencyLayouts(currentDependencyLayouts) {
-            const nextDependencyLayouts = getDependencyLayouts(
-                dependency,
-                selectedDependencyIds,
-                taskBarElementsRef.current,
-                timelineBarsRef.current,
-                metrics.rowHeight,
-            );
+        syncDependencyLayouts();
+    }, [
+        dependency,
+        metrics.rowHeight,
+        metrics.timelineWidth,
+        selectedDependencyIds,
+        timelineTaskBars,
+    ]);
 
-            if (hasSameDependencyLayouts(currentDependencyLayouts, nextDependencyLayouts)) {
-                return currentDependencyLayouts;
-            }
+    useLayoutEffect(function keepDraggedDependencyPathsSyncedAfterRender() {
+        const dragState = dragStateRef.current;
 
-            return nextDependencyLayouts;
-        });
+        if (!dragState || dragState.type !== TASK_DRAG_TYPE_MOVE || !dragState.hasMoved) {
+            return;
+        }
+
+        updateDraggedDependencyPaths(dragState);
     });
+
+    function syncDependencyLayouts(options = {}) {
+        const currentDependencyLayouts = dependencyLayoutsRef.current;
+        const timelineBarsElement = timelineBarsRef.current;
+        const nextDependencyLayouts = getDependencyLayouts(
+            dependency,
+            selectedDependencyIds,
+            taskBarElementsRef.current,
+            timelineBarsElement,
+            metrics.rowHeight,
+        );
+
+        if (
+            !options.allowMissingTaskBars
+            && shouldRetryDependencyLayoutSync(
+                dependency,
+                taskBarElementsRef.current,
+                timelineBarsElement,
+                currentDependencyLayouts,
+                nextDependencyLayouts,
+            )
+        ) {
+            scheduleDependencyLayoutSync({ allowMissingTaskBars: true });
+            return;
+        }
+
+        if (hasSameDependencyLayouts(currentDependencyLayouts, nextDependencyLayouts)) {
+            return;
+        }
+
+        dependencyLayoutsRef.current = nextDependencyLayouts;
+        setDependencyLayouts(nextDependencyLayouts);
+    }
+
+    function scheduleDependencyLayoutSync(options = {}) {
+        pendingDependencyLayoutSyncOptionsRef.current = {
+            allowMissingTaskBars: Boolean(options.allowMissingTaskBars),
+        };
+
+        if (dependencyLayoutFrameIdRef.current !== null) {
+            return;
+        }
+
+        dependencyLayoutFrameIdRef.current = window.requestAnimationFrame(
+            function runDependencyLayoutSyncFrame() {
+                const pendingOptions = pendingDependencyLayoutSyncOptionsRef.current || {};
+
+                dependencyLayoutFrameIdRef.current = null;
+                pendingDependencyLayoutSyncOptionsRef.current = null;
+                syncDependencyLayouts(pendingOptions);
+            },
+        );
+    }
+
+    function cancelDependencyLayoutFrame() {
+        if (dependencyLayoutFrameIdRef.current === null) {
+            return;
+        }
+
+        window.cancelAnimationFrame(dependencyLayoutFrameIdRef.current);
+        dependencyLayoutFrameIdRef.current = null;
+        pendingDependencyLayoutSyncOptionsRef.current = null;
+    }
 
     useLayoutEffect(function keepTaskHoverBubblePositionSynced() {
         applyStoredTaskHoverBubblePosition();
@@ -1154,9 +1240,35 @@ export default function TimelineChart(props) {
 
         onHighlightTask(task.id);
 
+        const isTaskSelectedAtMouseDown = selectedTaskIds.includes(task.id);
+        const shouldSelectTaskOnClickEnd = (
+            isTaskSelectedAtMouseDown
+            && selectedTaskIds.length > 1
+        );
         const taskIds = getTaskInteractionIds(tasks, selectedTaskIds, task.id);
+        const sourceParentTaskId = getParentTaskId(tasks, task.id);
+        const activeChildDropTargetTaskId = getInitialChildDropTargetTaskId(
+            tasks,
+            task,
+            taskIds,
+        );
+        const sourceChildIndex = getTaskDirectChildIndex(
+            tasks,
+            sourceParentTaskId,
+            task.id,
+        );
+        const dependencyDragContext = getTaskDragDependencyContext(
+            dependency,
+            taskIds,
+            taskBarElementsRef.current,
+            timelineBarsRef.current,
+        );
+        const taskDropHitContext = getTaskDropHitContext(
+            taskIds,
+            taskBarElementsRef.current,
+        );
 
-        if (!selectedTaskIds.includes(task.id)) {
+        if (!isTaskSelectedAtMouseDown) {
             onSelectTask(task.id, selectionMode, tasks);
         }
 
@@ -1175,6 +1287,13 @@ export default function TimelineChart(props) {
             dayDelta: 0,
             pixelDelta: 0,
             pixelDeltaY: 0,
+            activeChildDropTargetTaskId,
+            dependencyDragContext,
+            hasLeftSourceParentDropAreaVertically: false,
+            sourceParentTaskId,
+            sourceChildIndex,
+            shouldSelectTaskOnClickEnd,
+            taskDropHitContext,
         };
     }
 
@@ -1200,6 +1319,10 @@ export default function TimelineChart(props) {
     }
 
     function handleTimelineBarsMouseMove(event) {
+        if (dragStateRef.current && isTaskInteractionDrag(dragStateRef.current)) {
+            return;
+        }
+
         setActiveMultiTaskHandleTaskId(getMultiTaskDependencyHandleTaskIdAtPointer(event));
     }
 
@@ -1498,6 +1621,7 @@ export default function TimelineChart(props) {
         dragState.pixelDeltaY = getTaskDragPreviewPixelDeltaY(dragState, pointer);
 
         if (dragState.type === TASK_DRAG_TYPE_SUB_TASK_MOVE) {
+            setTaskDropTargetIfChanged(null);
             setTaskDragPreview({
                 type: dragState.type,
                 subTaskId: dragState.subBar.subTask.id,
@@ -1508,6 +1632,7 @@ export default function TimelineChart(props) {
         }
 
         if (dragState.type === TASK_DRAG_TYPE_SUB_TASK_RESIZE) {
+            setTaskDropTargetIfChanged(null);
             setTaskDragPreview({
                 type: dragState.type,
                 subTaskId: dragState.subBar.subTask.id,
@@ -1520,9 +1645,11 @@ export default function TimelineChart(props) {
 
         if (dragState.type === TASK_DRAG_TYPE_MOVE) {
             applyMoveTaskDragPreview(dragState);
+            setTaskDropTargetIfChanged(getTaskDropTarget(dragState, pointer));
             return;
         }
 
+        setTaskDropTargetIfChanged(null);
         setTaskDragPreview({
             taskId: dragState.taskId,
             taskIds: dragState.taskIds,
@@ -1551,6 +1678,7 @@ export default function TimelineChart(props) {
         });
 
         taskDragPreviewTaskIdsRef.current = [...dragState.taskIds];
+        updateDraggedDependencyPaths(dragState);
     }
 
     function applyTaskBarMovePreview(taskId, dragState) {
@@ -1568,11 +1696,27 @@ export default function TimelineChart(props) {
     }
 
     function clearMoveTaskDragPreview() {
+        if (taskDragPreviewTaskIdsRef.current.length === 0) {
+            return;
+        }
+
         taskDragPreviewTaskIdsRef.current.forEach(function clearTaskMovePreview(taskId) {
             clearTaskBarMovePreview(taskId);
             clearSubTaskBarMovePreview(taskId);
         });
         taskDragPreviewTaskIdsRef.current = [];
+        syncDependencyLayouts();
+    }
+
+    function setTaskDropTargetIfChanged(nextTaskDropTarget) {
+        const nextSignature = getTaskDropTargetSignature(nextTaskDropTarget);
+
+        if (taskDropTargetSignatureRef.current === nextSignature) {
+            return;
+        }
+
+        taskDropTargetSignatureRef.current = nextSignature;
+        setTaskDropTarget(nextTaskDropTarget);
     }
 
     function clearTaskBarMovePreview(taskId) {
@@ -1619,6 +1763,77 @@ export default function TimelineChart(props) {
         });
     }
 
+    function setDependencyPathElement(dependencyId, pathRole, pathElement) {
+        const currentPathElements = dependencyPathElementsRef.current.get(dependencyId) || {};
+
+        if (!pathElement) {
+            delete currentPathElements[pathRole];
+
+            if (
+                !currentPathElements[DEPENDENCY_PATH_ROLE_LINE]
+                && !currentPathElements[DEPENDENCY_PATH_ROLE_HIT]
+            ) {
+                dependencyPathElementsRef.current.delete(dependencyId);
+            } else {
+                dependencyPathElementsRef.current.set(dependencyId, currentPathElements);
+            }
+
+            return;
+        }
+
+        dependencyPathElementsRef.current.set(dependencyId, {
+            ...currentPathElements,
+            [pathRole]: pathElement,
+        });
+    }
+
+    function updateDraggedDependencyPaths(dragState) {
+        const dependencyDragContext = dragState.dependencyDragContext;
+
+        if (!dependencyDragContext || dependencyDragContext.dependencyIds.length === 0) {
+            return;
+        }
+
+        dependencyDragContext.dependencyIds.forEach(function updateDependencyPath(dependencyId) {
+            const dependencyItem = dependencyDragContext.dependencyItemById.get(dependencyId);
+            const normalizedDependencyItem = getRightToLeftDependencyItem(dependencyItem);
+
+            if (!normalizedDependencyItem) {
+                return;
+            }
+
+            const fromPoint = getLiveTaskDependencyAnchorPoint(
+                normalizedDependencyItem.fromTaskId,
+                normalizedDependencyItem.fromSide,
+                taskBarElementsRef.current,
+                timelineBarsRef.current,
+                metricsRef.current?.rowHeight,
+                dragState,
+            );
+            const toPoint = getLiveTaskDependencyAnchorPoint(
+                normalizedDependencyItem.toTaskId,
+                normalizedDependencyItem.toSide,
+                taskBarElementsRef.current,
+                timelineBarsRef.current,
+                metricsRef.current?.rowHeight,
+                dragState,
+            );
+
+            if (!fromPoint || !toPoint) {
+                return;
+            }
+
+            const path = getDependencyPath(
+                fromPoint,
+                normalizedDependencyItem.fromSide,
+                toPoint,
+                normalizedDependencyItem.toSide,
+            );
+
+            setDependencyPathAttribute(dependencyPathElementsRef.current.get(dependencyId), path);
+        });
+    }
+
     function cancelTaskDragPreviewFrame() {
         if (taskDragFrameIdRef.current === null) {
             return;
@@ -1655,6 +1870,7 @@ export default function TimelineChart(props) {
         dragStateRef.current = null;
         clearMoveTaskDragPreview();
         setTaskDragPreview(null);
+        setTaskDropTargetIfChanged(null);
 
         if (dragState.type === TASK_DRAG_TYPE_SUB_TASK_MOVE) {
             if (!dragState.hasMoved) {
@@ -1695,21 +1911,335 @@ export default function TimelineChart(props) {
         }
 
         if (!dragState.hasMoved) {
+            if (!dragState.shouldSelectTaskOnClickEnd) {
+                return;
+            }
+
             onSelectTaskRef.current(dragState.taskId);
             return;
         }
 
         const dayDelta = getTaskDragDayDelta(dragState, event);
         const rowDelta = getTaskDragRowDelta(dragState, event);
+        const dropTarget = getTaskDropTarget(dragState, event);
 
         if (dragState.type === TASK_DRAG_TYPE_RESIZE && dayDelta !== 0) {
             onResizeTaskDatesRef.current(dragState.taskId, dragState.resizeEdge, dayDelta);
             return;
         }
 
-        if (dragState.type === TASK_DRAG_TYPE_MOVE && (dayDelta !== 0 || rowDelta !== 0)) {
-            onMoveTasksRef.current(dragState.taskId, dayDelta, rowDelta);
+        if (
+            dragState.type === TASK_DRAG_TYPE_MOVE
+            && (dayDelta !== 0 || rowDelta !== 0 || dropTarget)
+        ) {
+            onMoveTasksRef.current(dragState.taskId, dayDelta, rowDelta, null, dropTarget);
         }
+    }
+
+    function getTaskDropTarget(dragState, event) {
+        if (
+            !dragState
+            || dragState.type !== TASK_DRAG_TYPE_MOVE
+            || !dragState.hasMoved
+        ) {
+            return null;
+        }
+
+        const activeChildDropTarget = getActiveTaskChildDropTargetAtPointer(dragState, event);
+
+        if (activeChildDropTarget) {
+            return activeChildDropTarget;
+        }
+
+        const targetTask = getTaskBarTargetAtPointer(dragState, event);
+
+        if (targetTask) {
+            dragState.activeChildDropTargetTaskId = canTaskHaveChildTasks(targetTask)
+                ? targetTask.id
+                : null;
+
+            return getTaskDropTargetForTask(
+                targetTask,
+                TASK_DROP_TARGET_SWAP,
+                shouldRemoveSourceParentTaskOnSwap(dragState, event),
+            );
+        }
+
+        const targetRowTask = getTaskRowTargetAtPointer(dragState, event);
+
+        if (targetRowTask) {
+            return getTaskDropTargetForTask(
+                targetRowTask,
+                TASK_DROP_TARGET_SWAP,
+                shouldRemoveSourceParentTaskOnSwap(dragState, event),
+                false,
+            );
+        }
+
+        if (shouldRemoveSourceParentTaskOnDrop(dragState)) {
+            return {
+                type: TASK_DROP_TARGET_DETACH,
+                removeParentTask: true,
+            };
+        }
+
+        return getActiveTaskChildDropTargetAtPointer(dragState, event);
+    }
+
+    function getTaskBarTargetAtPointer(dragState, event) {
+        if (dragState.taskDropHitContext) {
+            return getTaskBarTargetFromHitContext(dragState.taskDropHitContext, event);
+        }
+
+        const movingTaskIds = new Set(dragState.taskIds);
+
+        for (const [taskId, taskBarElement] of taskBarElementsRef.current.entries()) {
+            if (movingTaskIds.has(taskId)) {
+                continue;
+            }
+
+            const task = getTaskById(tasksRef.current, taskId);
+
+            if (!task || !isPointerInsideElement(taskBarElement, event)) {
+                continue;
+            }
+
+            return task;
+        }
+
+        return null;
+    }
+
+
+    function getTaskBarTargetFromHitContext(taskDropHitContext, event) {
+        for (const taskHitArea of taskDropHitContext.taskHitAreas) {
+            if (!isPointerInsideTaskHitArea(taskHitArea, event)) {
+                continue;
+            }
+
+            return getTaskById(tasksRef.current, taskHitArea.taskId);
+        }
+
+        return null;
+    }
+
+
+    function getTaskRowTargetAtPointer(dragState, event) {
+        const panel = timelinePanelRef.current;
+        const metrics = metricsRef.current;
+
+        if (!panel || !metrics) {
+            return null;
+        }
+
+        const panelRect = panel.getBoundingClientRect();
+        const pointerY = event.clientY - panelRect.top + panel.scrollTop;
+        const rowIndex = Math.floor(
+            (pointerY - metrics.headerHeight) / metrics.rowHeight,
+        );
+        const targetTask = tasksRef.current[rowIndex];
+
+        if (!targetTask || dragState.taskIds.includes(targetTask.id)) {
+            return null;
+        }
+
+        return targetTask;
+    }
+
+    function getActiveTaskChildDropTargetAtPointer(dragState, event) {
+        const targetTaskId = dragState.activeChildDropTargetTaskId;
+
+        if (!targetTaskId) {
+            return null;
+        }
+
+        const task = getTaskById(tasksRef.current, targetTaskId);
+        const taskBarElement = taskBarElementsRef.current.get(targetTaskId);
+        const area = getTaskDropArea(task, taskBarElement);
+
+        if (!area || !isPointerInsideTaskDropArea(area, event)) {
+            updateSourceParentDropAreaExitState(dragState, targetTaskId, area, event);
+            dragState.activeChildDropTargetTaskId = null;
+
+            return null;
+        }
+
+        return {
+            type: TASK_DROP_TARGET_CHILD,
+            targetTaskId,
+            childIndex: getTaskDropChildIndex(targetTaskId, area, event, dragState),
+            area,
+        };
+    }
+
+    function getTaskDropTargetForTask(
+        task,
+        type,
+        removeParentTask = false,
+        includeChildDropArea = true,
+    ) {
+        const taskBarElement = taskBarElementsRef.current.get(task.id);
+        const area = includeChildDropArea && canTaskHaveChildTasks(task)
+            ? getTaskDropArea(task, taskBarElement)
+            : null;
+
+        return {
+            type,
+            targetTaskId: task.id,
+            removeParentTask,
+            area,
+        };
+    }
+
+    function shouldRemoveSourceParentTaskOnSwap(dragState, event) {
+        if (!dragState.sourceParentTaskId) {
+            return false;
+        }
+
+        return dragState.hasLeftSourceParentDropAreaVertically
+            || !isPointerVerticallyInsideSourceParentDropArea(dragState, event);
+    }
+
+    function shouldRemoveSourceParentTaskOnDrop(dragState) {
+        return Boolean(
+            dragState.sourceParentTaskId
+            && dragState.hasLeftSourceParentDropAreaVertically,
+        );
+    }
+
+    function updateSourceParentDropAreaExitState(dragState, targetTaskId, area, event) {
+        if (
+            !dragState.sourceParentTaskId
+            || targetTaskId !== dragState.sourceParentTaskId
+            || !area
+            || isPointerVerticallyInsideTaskDropArea(area, event)
+        ) {
+            return;
+        }
+
+        dragState.hasLeftSourceParentDropAreaVertically = true;
+    }
+
+    function isPointerVerticallyInsideSourceParentDropArea(dragState, event) {
+        const parentTask = getTaskById(tasksRef.current, dragState.sourceParentTaskId);
+        const parentTaskBarElement = taskBarElementsRef.current.get(dragState.sourceParentTaskId);
+        const area = getTaskDropArea(parentTask, parentTaskBarElement);
+
+        if (!area) {
+            return false;
+        }
+
+        return isPointerVerticallyInsideTaskDropArea(area, event);
+    }
+
+    function getTaskDropArea(task, taskBarElement) {
+        const timelineBarsElement = timelineBarsRef.current;
+
+        if (!timelineBarsElement || !taskBarElement) {
+            return null;
+        }
+
+        const taskIndex = tasksRef.current.findIndex(function matchDropTask(currentTask) {
+            return currentTask.id === task.id;
+        });
+
+        if (taskIndex < 0) {
+            return null;
+        }
+
+        const layerRect = timelineBarsElement.getBoundingClientRect();
+        const taskBarRect = taskBarElement.getBoundingClientRect();
+        const childRowCount = getVisibleChildTaskRowCount(tasksRef.current, taskIndex);
+        const rowHeight = metricsRef.current?.rowHeight || dragStateRef.current?.rowHeight || 0;
+
+        return {
+            left: taskBarRect.left - layerRect.left,
+            top: taskBarRect.bottom - layerRect.top,
+            width: taskBarRect.width,
+            height: rowHeight * (childRowCount + 1),
+        };
+    }
+
+    function isPointerInsideTaskDropArea(area, event) {
+        const timelineBarsElement = timelineBarsRef.current;
+
+        if (!timelineBarsElement) {
+            return false;
+        }
+
+        const layerRect = timelineBarsElement.getBoundingClientRect();
+        const pointerX = event.clientX - layerRect.left;
+        const pointerY = event.clientY - layerRect.top;
+
+        return (
+            pointerX >= area.left
+            && pointerX <= area.left + area.width
+            && pointerY >= area.top
+            && pointerY <= area.top + area.height
+        );
+    }
+
+    function isPointerVerticallyInsideTaskDropArea(area, event) {
+        const timelineBarsElement = timelineBarsRef.current;
+
+        if (!timelineBarsElement) {
+            return false;
+        }
+
+        const layerRect = timelineBarsElement.getBoundingClientRect();
+        const pointerY = event.clientY - layerRect.top;
+
+        return pointerY >= area.top && pointerY <= area.top + area.height;
+    }
+
+    function getTaskDropChildIndex(parentTaskId, area, event, dragState) {
+        if (
+            parentTaskId === dragState.activeChildDropTargetTaskId
+            && dragState.sourceChildIndex !== null
+            && dragState.sourceChildIndex !== undefined
+        ) {
+            const rowDelta = getTaskDragRowDelta(dragState, event);
+
+            return dragState.sourceChildIndex + rowDelta;
+        }
+
+        const timelineBarsElement = timelineBarsRef.current;
+        const rowHeight = metricsRef.current?.rowHeight || dragStateRef.current?.rowHeight || 0;
+
+        if (!timelineBarsElement || rowHeight <= 0) {
+            return null;
+        }
+
+        const layerRect = timelineBarsElement.getBoundingClientRect();
+        const pointerY = event.clientY - layerRect.top;
+        const parentTaskIndex = tasksRef.current.findIndex(function matchParentTask(task) {
+            return task.id === parentTaskId;
+        });
+
+        if (parentTaskIndex < 0) {
+            return null;
+        }
+
+        const parentRowBottom = (parentTaskIndex + 1) * rowHeight;
+        const rowOffset = Math.round((pointerY - parentRowBottom) / rowHeight);
+
+        return getDirectChildInsertIndex(
+            tasksRef.current,
+            parentTaskIndex,
+            rowOffset,
+            dragState.taskIds,
+        );
+    }
+
+    function isPointerInsideElement(element, event) {
+        const elementRect = element.getBoundingClientRect();
+
+        return (
+            event.clientX >= elementRect.left
+            && event.clientX <= elementRect.right
+            && event.clientY >= elementRect.top
+            && event.clientY <= elementRect.bottom
+        );
     }
 
     function setTaskBarElement(taskId, taskBarElement) {
@@ -1720,6 +2250,10 @@ export default function TimelineChart(props) {
 
         taskBarElementsRef.current.set(taskId, taskBarElement);
         applyCurrentTaskBarMovePreview(taskId);
+
+        if (dependency.length > 0 && dependencyLayoutsRef.current.length === 0) {
+            scheduleDependencyLayoutSync();
+        }
     }
 
     function setSubTaskBarElement(parentTaskId, subTaskId, subTaskBarElement) {
@@ -1869,11 +2403,25 @@ export default function TimelineChart(props) {
                             className={getDependencyPathClassName(dependencyLayout.isSelected)}
                         >
                             <path
+                                ref={function setRenderedDependencyLinePath(pathElement) {
+                                    setDependencyPathElement(
+                                        dependencyLayout.id,
+                                        DEPENDENCY_PATH_ROLE_LINE,
+                                        pathElement,
+                                    );
+                                }}
                                 className="timeline-dependency-line"
                                 d={dependencyLayout.path}
                                 markerEnd={`url(#${DEPENDENCY_ARROW_MARKER_ID})`}
                             />
                             <path
+                                ref={function setRenderedDependencyHitPath(pathElement) {
+                                    setDependencyPathElement(
+                                        dependencyLayout.id,
+                                        DEPENDENCY_PATH_ROLE_HIT,
+                                        pathElement,
+                                    );
+                                }}
                                 className="timeline-dependency-hit-path"
                                 d={dependencyLayout.path}
                                 onMouseDown={function selectDependency(event) {
@@ -2131,6 +2679,17 @@ export default function TimelineChart(props) {
                     onMouseMove={handleTimelineBarsMouseMove}
                     onMouseLeave={handleTimelineBarsMouseLeave}
                 >
+                    {taskDropTarget?.area && (
+                        <Box
+                            className="timeline-task-drop-target"
+                            sx={{
+                                left: `${taskDropTarget.area.left}px`,
+                                top: `${taskDropTarget.area.top}px`,
+                                width: `${taskDropTarget.area.width}px`,
+                                height: `${taskDropTarget.area.height}px`,
+                            }}
+                        />
+                    )}
                     {metrics.bars.map(function renderTaskBar(bar) {
                         const isSelected = selectedTaskIds.includes(bar.task.id);
                         const isCut = cutTaskIdSet.has(bar.task.id);
@@ -2207,6 +2766,7 @@ export default function TimelineChart(props) {
                             : taskBarVisualLayout;
                         const canResizeTask = (
                             !isRelease
+                            && !hasTaskChildren(bar.task)
                             && selectedTaskIds.length <= 1
                             && visibleTaskBarLayout.width >= MIN_TASK_BAR_RESIZE_WIDTH_PIXELS
                         );
@@ -2226,6 +2786,7 @@ export default function TimelineChart(props) {
                                     setTaskBarElement(bar.task.id, taskBarElement);
                                 }}
                                 aria-label={bar.task.name}
+                                data-task-id={bar.task.id}
                                 role="button"
                                 tabIndex={0}
                                 className={getTaskBarClassName(
@@ -2659,6 +3220,63 @@ function isTimelineHeaderTodayCell(metrics, segment) {
 }
 
 
+function getTaskById(tasks, taskId) {
+    return tasks.find(function matchTask(task) {
+        return task.id === taskId;
+    }) || null;
+}
+
+
+function getVisibleChildTaskRowCount(tasks, taskIndex) {
+    const task = tasks[taskIndex];
+
+    if (!task) {
+        return 0;
+    }
+
+    const taskDepth = getTaskDepth(task);
+    let childRowCount = 0;
+
+    for (let index = taskIndex + 1; index < tasks.length; index += 1) {
+        if (getTaskDepth(tasks[index]) <= taskDepth) {
+            break;
+        }
+
+        childRowCount += 1;
+    }
+
+    return childRowCount;
+}
+
+
+function getDirectChildInsertIndex(tasks, parentTaskIndex, rowOffset, movingTaskIds) {
+    const parentTask = tasks[parentTaskIndex];
+
+    if (!parentTask) {
+        return 0;
+    }
+
+    const parentDepth = getTaskDepth(parentTask);
+    const movingTaskIdSet = new Set(movingTaskIds);
+    const targetTaskIndex = parentTaskIndex + 1 + Math.max(rowOffset, 0);
+    let childIndex = 0;
+
+    for (let index = parentTaskIndex + 1; index < tasks.length; index += 1) {
+        const taskDepth = getTaskDepth(tasks[index]);
+
+        if (taskDepth <= parentDepth || index >= targetTaskIndex) {
+            break;
+        }
+
+        if (taskDepth === parentDepth + 1 && !movingTaskIdSet.has(tasks[index].id)) {
+            childIndex += 1;
+        }
+    }
+
+    return childIndex;
+}
+
+
 function getTimelineHeaderCellClassName(
     isSelectableDayCell,
     isSelectedDayCell,
@@ -2884,6 +3502,45 @@ function getDependencyLayouts(
 }
 
 
+function shouldRetryDependencyLayoutSync(
+    dependency,
+    taskBarElements,
+    timelineBarsElement,
+    currentDependencyLayouts,
+    nextDependencyLayouts,
+) {
+    if (currentDependencyLayouts.length === 0) {
+        return false;
+    }
+
+    if (nextDependencyLayouts.length >= currentDependencyLayouts.length) {
+        return false;
+    }
+
+    if (!timelineBarsElement) {
+        return true;
+    }
+
+    return hasMissingDependencyTaskBarElement(dependency, taskBarElements);
+}
+
+
+function hasMissingDependencyTaskBarElement(dependency, taskBarElements) {
+    return dependency.some(function hasMissingTaskBarElement(dependencyItem) {
+        const normalizedDependencyItem = getRightToLeftDependencyItem(dependencyItem);
+
+        if (!normalizedDependencyItem) {
+            return false;
+        }
+
+        return (
+            !taskBarElements.has(normalizedDependencyItem.fromTaskId)
+            || !taskBarElements.has(normalizedDependencyItem.toTaskId)
+        );
+    });
+}
+
+
 function getTaskDependencyAnchorPoint(
     taskId,
     side,
@@ -2899,11 +3556,23 @@ function getTaskDependencyAnchorPoint(
 
     const taskBarBounds = taskBarElement.getBoundingClientRect();
     const timelineBarsBounds = timelineBarsElement.getBoundingClientRect();
-    const taskBarTop = taskBarBounds.top - timelineBarsBounds.top;
-    const taskBarCenterY = taskBarTop + taskBarBounds.height / 2;
-    const x = side === DEPENDENCY_SIDE_LEFT
-        ? taskBarBounds.left - timelineBarsBounds.left
-        : taskBarBounds.right - timelineBarsBounds.left;
+
+    return getDependencyAnchorPointFromBounds(
+        {
+            left: taskBarBounds.left - timelineBarsBounds.left,
+            right: taskBarBounds.right - timelineBarsBounds.left,
+            top: taskBarBounds.top - timelineBarsBounds.top,
+            height: taskBarBounds.height,
+        },
+        side,
+        rowHeight,
+    );
+}
+
+
+function getDependencyAnchorPointFromBounds(bounds, side, rowHeight = null) {
+    const taskBarCenterY = bounds.top + bounds.height / 2;
+    const x = side === DEPENDENCY_SIDE_LEFT ? bounds.left : bounds.right;
 
     return {
         x,
@@ -2911,6 +3580,244 @@ function getTaskDependencyAnchorPoint(
         rowTopY: getDependencyAnchorRowTopY(taskBarCenterY, rowHeight),
         rowBottomY: getDependencyAnchorRowBottomY(taskBarCenterY, rowHeight),
     };
+}
+
+
+function getLiveTaskDependencyAnchorPoint(
+    taskId,
+    side,
+    taskBarElements,
+    timelineBarsElement,
+    rowHeight,
+    dragState,
+) {
+    const draggedTaskBounds = dragState.dependencyDragContext?.taskBoundsById.get(taskId);
+
+    if (!draggedTaskBounds) {
+        return getTaskDependencyAnchorPoint(
+            taskId,
+            side,
+            taskBarElements,
+            timelineBarsElement,
+            rowHeight,
+        );
+    }
+
+    return getDependencyAnchorPointFromBounds(
+        {
+            left: draggedTaskBounds.left + dragState.pixelDelta,
+            right: draggedTaskBounds.right + dragState.pixelDelta,
+            top: draggedTaskBounds.top + dragState.pixelDeltaY,
+            height: draggedTaskBounds.height,
+        },
+        side,
+        rowHeight,
+    );
+}
+
+
+function getTaskDragDependencyContext(
+    dependency,
+    taskIds,
+    taskBarElements,
+    timelineBarsElement,
+) {
+    const dependencyIdsByTaskId = getTaskDependencyIdsByTaskId(dependency);
+    const dependencyIds = getDraggedDependencyIds(dependencyIdsByTaskId, taskIds);
+
+    return {
+        dependencyIds,
+        dependencyItemById: getDependencyItemById(dependency, dependencyIds),
+        taskBoundsById: getTaskDependencyBaseBoundsByTaskId(
+            taskIds,
+            taskBarElements,
+            timelineBarsElement,
+        ),
+    };
+}
+
+
+function getTaskDependencyIdsByTaskId(dependency) {
+    const dependencyIdsByTaskId = new Map();
+
+    dependency.forEach(function mapDependencyTaskIds(dependencyItem) {
+        const normalizedDependencyItem = getRightToLeftDependencyItem(dependencyItem);
+
+        if (!normalizedDependencyItem) {
+            return;
+        }
+
+        appendTaskDependencyId(
+            dependencyIdsByTaskId,
+            normalizedDependencyItem.fromTaskId,
+            dependencyItem.id,
+        );
+        appendTaskDependencyId(
+            dependencyIdsByTaskId,
+            normalizedDependencyItem.toTaskId,
+            dependencyItem.id,
+        );
+    });
+
+    return dependencyIdsByTaskId;
+}
+
+
+function appendTaskDependencyId(dependencyIdsByTaskId, taskId, dependencyId) {
+    if (!taskId || !dependencyId) {
+        return;
+    }
+
+    if (!dependencyIdsByTaskId.has(taskId)) {
+        dependencyIdsByTaskId.set(taskId, []);
+    }
+
+    dependencyIdsByTaskId.get(taskId).push(dependencyId);
+}
+
+
+function getDraggedDependencyIds(dependencyIdsByTaskId, taskIds) {
+    const dependencyIds = [];
+    const dependencyIdSet = new Set();
+
+    taskIds.forEach(function collectTaskDependencyIds(taskId) {
+        const taskDependencyIds = dependencyIdsByTaskId.get(taskId) || [];
+
+        taskDependencyIds.forEach(function collectDependencyId(dependencyId) {
+            if (dependencyIdSet.has(dependencyId)) {
+                return;
+            }
+
+            dependencyIdSet.add(dependencyId);
+            dependencyIds.push(dependencyId);
+        });
+    });
+
+    return dependencyIds;
+}
+
+
+function getDependencyItemById(dependency, dependencyIds) {
+    const dependencyIdSet = new Set(dependencyIds);
+    const dependencyItemById = new Map();
+
+    dependency.forEach(function mapDependencyItem(dependencyItem) {
+        if (!dependencyIdSet.has(dependencyItem.id)) {
+            return;
+        }
+
+        dependencyItemById.set(dependencyItem.id, dependencyItem);
+    });
+
+    return dependencyItemById;
+}
+
+
+function getTaskDependencyBaseBoundsByTaskId(taskIds, taskBarElements, timelineBarsElement) {
+    const taskBoundsById = new Map();
+
+    if (!timelineBarsElement) {
+        return taskBoundsById;
+    }
+
+    const timelineBarsBounds = timelineBarsElement.getBoundingClientRect();
+
+    taskIds.forEach(function mapTaskDependencyBaseBounds(taskId) {
+        const taskBarElement = taskBarElements.get(taskId);
+
+        if (!taskBarElement) {
+            return;
+        }
+
+        const taskBarBounds = taskBarElement.getBoundingClientRect();
+
+        taskBoundsById.set(taskId, {
+            left: taskBarBounds.left - timelineBarsBounds.left,
+            right: taskBarBounds.right - timelineBarsBounds.left,
+            top: taskBarBounds.top - timelineBarsBounds.top,
+            height: taskBarBounds.height,
+        });
+    });
+
+    return taskBoundsById;
+}
+
+
+function setDependencyPathAttribute(pathElements, path) {
+    if (!pathElements) {
+        return;
+    }
+
+    if (pathElements[DEPENDENCY_PATH_ROLE_LINE]) {
+        pathElements[DEPENDENCY_PATH_ROLE_LINE].setAttribute("d", path);
+    }
+
+    if (pathElements[DEPENDENCY_PATH_ROLE_HIT]) {
+        pathElements[DEPENDENCY_PATH_ROLE_HIT].setAttribute("d", path);
+    }
+}
+
+
+function getTaskDropTargetSignature(taskDropTarget) {
+    if (!taskDropTarget) {
+        return "none";
+    }
+
+    return [
+        taskDropTarget.type || "",
+        taskDropTarget.targetTaskId || "",
+        taskDropTarget.childIndex ?? "",
+        taskDropTarget.removeParentTask ? "remove-parent" : "",
+        getTaskDropTargetAreaSignature(taskDropTarget.area),
+    ].join("|");
+}
+
+
+function getTaskDropTargetAreaSignature(area) {
+    if (!area) {
+        return "";
+    }
+
+    return [
+        area.left,
+        area.top,
+        area.width,
+        area.height,
+    ].join(",");
+}
+
+
+function getTaskDropHitContext(movingTaskIds, taskBarElements) {
+    const movingTaskIdSet = new Set(movingTaskIds);
+    const taskHitAreas = [];
+
+    for (const [taskId, taskBarElement] of taskBarElements.entries()) {
+        if (movingTaskIdSet.has(taskId)) {
+            continue;
+        }
+
+        const taskBarBounds = taskBarElement.getBoundingClientRect();
+
+        taskHitAreas.push({
+            taskId,
+            left: taskBarBounds.left,
+            right: taskBarBounds.right,
+            top: taskBarBounds.top,
+            bottom: taskBarBounds.bottom,
+        });
+    }
+
+    return { taskHitAreas };
+}
+
+
+function isPointerInsideTaskHitArea(taskHitArea, event) {
+    return (
+        event.clientX >= taskHitArea.left
+        && event.clientX <= taskHitArea.right
+        && event.clientY >= taskHitArea.top
+        && event.clientY <= taskHitArea.bottom
+    );
 }
 
 
@@ -3980,16 +4887,79 @@ function isDateSelectionDrag(dragState) {
 
 function getTaskInteractionIds(tasks, selectedTaskIds, taskId) {
     if (!selectedTaskIds.includes(taskId)) {
-        return [taskId];
+        return getTaskTreeIds(tasks, taskId);
     }
 
-    return tasks
+    const parentTaskId = getParentTaskId(tasks, taskId);
+
+    if (parentTaskId && selectedTaskIds.includes(parentTaskId)) {
+        return getTaskTreeIds(tasks, taskId);
+    }
+
+    const selectedTaskIdsInOrder = tasks
         .filter(function matchSelectedTask(task) {
             return selectedTaskIds.includes(task.id);
         })
         .map(function mapTaskId(task) {
             return task.id;
         });
+
+    return getTaskIdsWithDescendants(tasks, selectedTaskIdsInOrder);
+}
+
+
+function getInitialChildDropTargetTaskId(tasks, task, movingTaskIds) {
+    const parentTaskId = getParentTaskId(tasks, task.id);
+
+    if (!parentTaskId || movingTaskIds.includes(parentTaskId)) {
+        return null;
+    }
+
+    const parentTask = getTaskById(tasks, parentTaskId);
+
+    if (!canTaskHaveChildTasks(parentTask)) {
+        return null;
+    }
+
+    return parentTaskId;
+}
+
+
+function getTaskDirectChildIndex(tasks, parentTaskId, taskId) {
+    if (!parentTaskId) {
+        return null;
+    }
+
+    const parentTaskIndex = tasks.findIndex(function matchParentTask(task) {
+        return task.id === parentTaskId;
+    });
+
+    if (parentTaskIndex < 0) {
+        return null;
+    }
+
+    const parentDepth = getTaskDepth(tasks[parentTaskIndex]);
+    let childIndex = 0;
+
+    for (let index = parentTaskIndex + 1; index < tasks.length; index += 1) {
+        const taskDepth = getTaskDepth(tasks[index]);
+
+        if (taskDepth <= parentDepth) {
+            break;
+        }
+
+        if (taskDepth !== parentDepth + 1) {
+            continue;
+        }
+
+        if (tasks[index].id === taskId) {
+            return childIndex;
+        }
+
+        childIndex += 1;
+    }
+
+    return null;
 }
 
 

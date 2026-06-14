@@ -16,11 +16,13 @@ from models import (
     DayOff,
     DayOffBulkCreate,
     Dependency,
+    MULTI_PHASE_TASK_TYPE,
     NO_PROJECT_NAME,
     PlannerData,
     ProjectName,
     ProjectNameListUpdate,
     ProjectRename,
+    RELEASE_TASK_TYPE,
     Task,
     TaskCreate,
     UNASSIGNED_ASSIGNEE,
@@ -66,6 +68,14 @@ def create_task(task_create: TaskCreate, after_task_id: str | None = None) -> Ta
     else:
         tasks.append(task)
 
+    try:
+        _validate_task_hierarchy(tasks)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
+
     _write_tasks(tasks)
 
     return task
@@ -77,6 +87,14 @@ def update_task(task_id: str, task_update: TaskCreate) -> Task:
     updated_task = Task(id=task_id, **task_update.model_dump())
 
     tasks[task_index] = updated_task
+    try:
+        _validate_task_hierarchy(tasks)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
+
     _write_tasks(tasks)
 
     return updated_task
@@ -96,6 +114,14 @@ def replace_tasks(
 
     if updated_dependency is None:
         updated_dependency = _read_dependency()
+
+    try:
+        _validate_task_hierarchy(updated_tasks)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
 
     _write_tasks_and_dependency(
         updated_tasks,
@@ -269,7 +295,10 @@ def _read_tasks() -> list[Task]:
     raw_tasks = _extract_raw_tasks(payload)
 
     try:
-        return [Task.model_validate(raw_task) for raw_task in raw_tasks]
+        tasks = [Task.model_validate(raw_task) for raw_task in raw_tasks]
+        _validate_task_hierarchy(tasks)
+
+        return tasks
     except ValueError as error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -564,6 +593,48 @@ def _validate_unique_dependency(dependency: list[Dependency]) -> None:
 
     if len(set(dependency_keys)) != len(dependency_keys):
         raise ValueError("Dependencies must be unique.")
+
+
+def _validate_task_hierarchy(tasks: list[Task]) -> None:
+    task_by_id = {
+        task.id: task
+        for task in tasks
+    }
+    parent_id_by_child_id: dict[str, str] = {}
+
+    for task in tasks:
+        if task.taskType in (RELEASE_TASK_TYPE, MULTI_PHASE_TASK_TYPE) and task.childTasks:
+            raise ValueError("Release and multi-phase tasks cannot be parent tasks.")
+
+        for child_task in task.childTasks or []:
+            if child_task.id == task.id:
+                raise ValueError("Task cannot be its own parent.")
+
+            if child_task.id not in task_by_id:
+                raise ValueError("Child task does not exist.")
+
+            if child_task.id in parent_id_by_child_id:
+                raise ValueError("Task cannot have more than one parent.")
+
+            parent_id_by_child_id[child_task.id] = task.id
+
+    for task in tasks:
+        _validate_task_has_no_parent_cycle(task.id, parent_id_by_child_id)
+
+
+def _validate_task_has_no_parent_cycle(
+    task_id: str,
+    parent_id_by_child_id: dict[str, str],
+) -> None:
+    visited_task_ids = set()
+    current_task_id = task_id
+
+    while current_task_id in parent_id_by_child_id:
+        if current_task_id in visited_task_ids:
+            raise ValueError("Task parent hierarchy cannot contain cycles.")
+
+        visited_task_ids.add(current_task_id)
+        current_task_id = parent_id_by_child_id[current_task_id]
 
 
 def _get_existing_task_dependency(

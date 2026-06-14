@@ -398,6 +398,33 @@ body.task-list-resizing {
 
 .task-list-name-cell {
     gap: 8px;
+    justify-content: flex-start;
+}
+
+.task-list-hierarchy-button-slot {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 24px;
+    height: 24px;
+}
+
+.task-list-add-child-slot {
+    margin-left: auto;
+    justify-content: flex-end;
+}
+
+.task-list-hierarchy-button {
+    width: 22px !important;
+    height: 22px !important;
+    padding: 0 !important;
+    color: var(--planner-muted-text-color) !important;
+}
+
+.task-list-hierarchy-button:hover {
+    color: var(--planner-text-color) !important;
+    background: var(--planner-row-hover-color) !important;
 }
 
 .task-list-sortable-heading {
@@ -445,6 +472,7 @@ body.task-list-resizing {
 }
 
 .task-list-row .task-list-name {
+    flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     font-size: var(--planner-task-text-size);
@@ -683,6 +711,15 @@ body.task-list-resizing {
     z-index: 5;
 }
 
+.timeline-task-drop-target {
+    position: absolute;
+    z-index: 80;
+    border: 1px solid rgba(30, 102, 245, 0.72);
+    background: rgba(30, 102, 245, 0.2);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+    pointer-events: none;
+}
+
 .timeline-dependencies {
     z-index: 4;
     right: 0;
@@ -890,6 +927,7 @@ body.task-list-resizing {
 
 .task-bar {
     position: absolute;
+    z-index: 10;
     display: flex;
     align-items: center;
     height: 26px;

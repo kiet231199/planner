@@ -78,6 +78,15 @@ class SubTaskCreate(BaseModel):
 SubTask = SubTaskCreate
 
 
+class ChildTask(BaseModel):
+    id: str = Field(min_length=1)
+
+    @field_validator("id")
+    @classmethod
+    def validate_child_task_id(cls, value: str) -> str:
+        return normalize_text_value(value)
+
+
 class TaskCreate(BaseModel):
     name: str = Field(min_length=1)
     description: Optional[str] = None
@@ -94,6 +103,7 @@ class TaskCreate(BaseModel):
         le=MAX_PROGRESS_PERCENT,
     )
     subTasks: Optional[list[SubTask]] = None
+    childTasks: Optional[list[ChildTask]] = None
 
     @field_validator("name", "taskType")
     @classmethod
@@ -151,6 +161,20 @@ class TaskCreate(BaseModel):
                     raise ValueError("Sub-tasks must not overlap.")
         else:
             self.subTasks = None
+
+        if self.taskType in (RELEASE_TASK_TYPE, MULTI_PHASE_TASK_TYPE) and self.childTasks:
+            raise ValueError("Release and multi-phase tasks cannot be parent tasks.")
+
+        if self.taskType in (RELEASE_TASK_TYPE, MULTI_PHASE_TASK_TYPE):
+            self.childTasks = None
+        elif self.childTasks is not None:
+            child_task_ids = [child_task.id for child_task in self.childTasks]
+
+            if len(set(child_task_ids)) != len(child_task_ids):
+                raise ValueError("Child task IDs must be unique.")
+
+            if len(self.childTasks) == 0:
+                self.childTasks = None
 
         if self.stopDate < self.startDate:
             raise ValueError("Stop date must be on or after start date.")

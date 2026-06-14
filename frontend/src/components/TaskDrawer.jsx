@@ -15,6 +15,7 @@ export default function TaskDrawer(props) {
         mode,
         task,
         tasks = [],
+        initialParentTaskId = "",
         subTaskEditRequest,
         onClose,
         onCreateTask,
@@ -49,9 +50,10 @@ export default function TaskDrawer(props) {
                 </IconButton>
             </Box>
             <TaskForm
-                key={getTaskFormKey(isEditMode, selectedTasks)}
+                key={getTaskFormKey(isEditMode, selectedTasks, initialParentTaskId)}
                 initialTask={isEditMode ? task : null}
                 initialTasks={isEditMode ? selectedTasks : []}
+                initialParentTaskId={isEditMode ? "" : initialParentTaskId}
                 subTaskEditRequest={isEditMode ? subTaskEditRequest : null}
                 isSaving={isSaving}
                 assignees={assignees}
@@ -117,9 +119,9 @@ function getDrawerDescription(isEditMode, isBulkEditMode) {
 }
 
 
-function getTaskFormKey(isEditMode, selectedTasks) {
+function getTaskFormKey(isEditMode, selectedTasks, initialParentTaskId) {
     if (!isEditMode) {
-        return "create";
+        return `create:${initialParentTaskId}`;
     }
 
     return selectedTasks.map(function mapTaskId(task) {
@@ -141,6 +143,7 @@ function getTaskFormKeyPart(task) {
         task.startDate || "",
         task.stopDate || "",
         String(task.progressPercent || 0),
+        task.parentTaskId || "",
     ].join("|");
 }
 

@@ -1,100 +1,132 @@
-# Project Planner
+﻿# 🗂️ Project Planner
 
-Phase 1 project planner with a React, Vite, and MUI frontend plus a FastAPI backend using JSON-file task persistence.
+Plan projects with a web app.
+It has a website and a server.
+Your tasks are saved in a data file.
 
-## Local Setup
+## 🚀 Quick Start
 
-Install frontend dependencies:
+Follow these steps in order.
+
+### 📦 Step 1: Install the Website Tools
+
+Open a terminal.
+Go to the frontend folder.
 
 ```powershell
 cd frontend
 npm install
 ```
 
-Install backend dependencies:
+This downloads the website tools.
+
+### 🐍 Step 2: Prepare Python
+
+Use Python 3.10 or newer.
+On Windows, the `python` command can be a shortcut that does not work.
+You may see: `The file cannot be accessed by the system`.
+Use a real Python instead.
+The easiest way is `uv`.
+
+Create a clean Python space:
 
 ```powershell
 cd ..
+uv venv --python 3.12 --seed .venv
+.\.venv\Scripts\activate
+```
+
+Without `uv`, use the standard way:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+```
+
+**Keep the Python space active.**
+
+### 🧩 Step 3: Install the Server Tools
+
+Keep the Python space active.
+Then run:
+
+```powershell
 python -m pip install -r backend\requirements.txt
 ```
 
-Run the frontend and backend together:
+This installs the server tools.
+
+The app works on Python 3.10 and newer.
+The saved package ranges fit new Python versions.
+
+### ▶️ Step 4: Start the App
+
+Keep the Python space active.
+Then run:
 
 ```powershell
 cd frontend
 npm run dev
 ```
 
-Press `Ctrl+C` in that terminal to stop both processes.
+This starts the website and the server.
 
-Open `http://localhost:5173`.
+**Open this link: http://localhost:5173**
 
-## Verification
+**Press `Ctrl+C` to stop the app.**
 
-Frontend build:
+## ✅ Check Everything Works
+
+Build the website:
 
 ```powershell
 cd frontend
 npm run build
 ```
 
-Backend compile check:
+Check the server code:
 
 ```powershell
 cd ..
 python -m py_compile backend\app.py backend\run.py backend\models.py backend\storage.py
 ```
 
-## Phase Notes
+Run these with the Python space active.
 
-### Phase 14 Feature 1: Parent task
+## 📌 How Tasks Are Stored
 
-Parent task support adds a hierarchy layer on top of normal tasks. A parent task stores child references in `childTasks`, while each child remains a normal task row. Parent rows calculate their start date, stop date, and progress from their child task tree, so those computed fields are disabled when a task has children.
+Your tasks live in one file:
+`backend\data\tasks.json`
 
-Implemented behavior:
-
-- Backend task models and storage validation support `childTasks`.
-- Storage rejects invalid hierarchy data, including duplicate parents, missing child ids, self-parent links, cycles, and release or multi-phase tasks acting as parents.
-- Task create, edit, bulk edit, undo, redo, cut, copy, paste, delete, and selection now preserve parent-child relationships.
-- Selecting a parent selects its full child tree; child tasks can still be selected independently.
-- Copy and paste creates new ids and remaps copied child relationships.
-- Deleting a parent deletes its descendants.
-- The task form includes a `Parent task` id field and an edit-mode copy-id button.
-- The task list includes an add-child button and an expand/collapse button for tasks with children.
-- Child rows are indented in the task list and stay directly below their parent in the task list and timeline.
-- Sorting applies recursively: child lists are sorted first, nested parent children are sorted before their parent-child row is sorted with sibling children, and parent or normal tasks are sorted after child groups without splitting child rows away from parents.
-- Filtering keeps ancestor tasks visible so matching child tasks still have their parent context.
-- Parent task drag moves the parent and visible children as one block.
-- Dragging onto another task can swap task positions or make the dragged task a child, depending on whether the cursor is on the target task bar or the target child-drop area.
-- Dragging a child task horizontally outside the parent drop area keeps the parent relationship and changes dates; dragging it vertically outside removes the parent relationship.
-- Collapsed parent drop targets remain one row high; new children are appended under the collapsed parent without auto-expanding it.
-
-Testing feedback and fixes:
-
-- The task-list expand/collapse button was moved to the left side of the task name, with the add-child button placed at the right edge of the task-name column.
-- Hover text was removed from the expand/collapse and add-child task-list buttons.
-- A blank-page reload caused by removing a still-needed tooltip import was fixed.
-- The child-drop blue area now starts directly from the task-bar body, without a visual gap.
-- The blue area is drawn above other task bars and suppresses other blue areas until it is disabled.
-- The blue area only appears after entering the target task bar first, except that dragging an existing child task shows its current parent area immediately.
-- Child task drag reorder now follows the same row-target behavior as normal task drag, including above-drop and below-drop cases when releasing on the target row.
-- Dragging a parent task group onto a normal task row swaps only with that row. Example: `Task A (+ children), Task B, Task C, Task D, Task E` dragged from `Task A` and released on `Task B` becomes `Task B, Task A (+ children), Task C, Task D, Task E`.
-
-Verification used for this feature:
-
-```powershell
-python -m py_compile backend\app.py backend\run.py backend\models.py backend\storage.py
-cd frontend
-npm run build
-```
-
-## Data
-
-Tasks are stored in `backend\data\tasks.json`.
-
-For smoke tests or temporary runs, override the data file:
+For a test run, use a different file:
 
 ```powershell
 $env:PROJECT_PLANNER_DATA_FILE = "$env:TEMP\project-planner-tasks.json"
 python backend\run.py
 ```
+
+Run this from the Python space.
+
+## 🆘 Common Issues
+
+### 😵 `python` Cannot Be Started
+
+Message: `The file cannot be accessed by the system`.
+Cause: `python` points to a shortcut that is not real Python.
+Fix: use a real Python, or activate your Python space.
+
+### 🔨 Server Tools Cannot Be Installed
+
+What you see: the installer tries to build a package from scratch.
+Cause: a very new Python has no ready-made package version yet.
+Fix: use ready-made packages only:
+
+```powershell
+python -m pip install --only-binary=:all: -r backend\requirements.txt
+```
+
+### 🤷 Missing Server Tool
+
+Message: `No module named fastapi`.
+Cause: the server tools went to a different Python.
+Fix: activate your Python space, then run `npm run dev`.
